@@ -1,36 +1,76 @@
 module Imp exposing
     ( Imp
-    , advance
-    , andMap
-    , andThen
-    , err
-    , eval
-    , get
-    , map
-    , map2
-    , map3
-    , map4
-    , map5
-    , map6
-    , modify
-    , onError
-    , program
-    , pure
-    , put
-    , result
+    , Program, program
+    , pure, err, result, task, advance
+    , andThen, andMap, onError, map
+    , map2, map3, map4, map5, map6
+    , eval, get, put, modify
     , sequence
-    , task
-    , void
     )
 
+{-| Imp provides a structure that combines 3 things; `Result`, `Task` and the
+state monad.
+
+@docs Imp
+
+
+# Imperative programs
+
+@docs Program, program
+
+
+# Constructors
+
+@docs pure, err, result, task, advance
+
+
+# Combinators for building imperative programs
+
+@docs andThen, andMap, onError, map
+
+
+# More maps
+
+@docs map2, map3, map4, map5, map6
+
+
+# State management
+
+@docs eval, get, put, modify
+
+
+# Sequencing lists of imperatives
+
+@docs sequence
+
+-}
+
 import Task
+
+
+
+-- The imperative structure
+
+
+type Imp s x a
+    = State (s -> ( s, T s x a ))
+
+
+type T s x a
+    = PTask (Task.Task x (Imp s x a))
+    | POk a
+    | PErr x
+
+
+
+-- Imperative programs
 
 
 type alias Program flags model err res =
     Platform.Program flags model (Imp model err res)
 
 
-program : flags -> (flags -> s) -> Imp s x a -> Platform.Program flags s (Imp s x a)
+program : flags -> (flags -> model) -> Imp model err res -> Program flags model err res
 program flags initFn io =
     Platform.worker
         { init = \_ -> eval io (initFn flags)
@@ -41,7 +81,7 @@ program flags initFn io =
 
 eval : Imp s x a -> s -> ( s, Cmd (Imp s x a) )
 eval (State io) state =
-    case io state |> Debug.log "eval" of
+    case io state of
         ( innerS, PTask t ) ->
             ( innerS
             , Task.attempt
@@ -68,21 +108,7 @@ eval (State io) state =
 
 
 
---
-
-
-type Imp s x a
-    = State (s -> ( s, T s x a ))
-
-
-type T s x a
-    = PTask (Task.Task x (Imp s x a))
-    | POk a
-    | PErr x
-
-
-
---
+-- Constructors
 
 
 pure : a -> Imp s x a
@@ -113,38 +139,69 @@ result res =
             err e
 
 
-
---
-
-
-get : Imp s x s
-get =
-    State (\s -> ( s, POk s ))
-
-
-put : s -> Imp s x ()
-put s =
-    State (\_ -> ( s, POk () ))
-
-
 advance : (s -> ( s, a )) -> Imp s x a
 advance fn =
     (\s -> fn s |> Tuple.mapSecond POk)
         |> State
 
 
-modify : (s -> s) -> Imp s x ()
-modify fn =
-    State (\s -> ( fn s, POk () ))
+
+-- Combinators for building imperative programs
 
 
-void : Imp s x a -> Imp s x ()
-void =
-    map (always ())
+andThen : (a -> Imp s x b) -> Imp s x a -> Imp s x b
+andThen mf (State io) =
+    (\s ->
+        case io s of
+            ( innerS, PTask t ) ->
+                ( innerS
+                , Task.andThen (\inner -> Task.succeed (andThen mf inner)) t
+                    |> PTask
+                )
+
+            ( innerS, POk x ) ->
+                let
+                    (State stateFn) =
+                        mf x
+                in
+                stateFn innerS
+
+            ( innerS, PErr e ) ->
+                ( innerS
+                , PErr e
+                )
+    )
+        |> State
 
 
+andMap : Imp s x a -> Imp s x (a -> b) -> Imp s x b
+andMap ma mf =
+    andThen (\f -> map f ma) mf
 
---
+
+onError : (x -> Imp s y a) -> Imp s x a -> Imp s y a
+onError ef (State io) =
+    (\s ->
+        case io s of
+            ( innerS, PTask t ) ->
+                ( innerS
+                , Task.onError
+                    (\e -> ef e |> Task.succeed)
+                    (t |> Task.map (onError ef))
+                    |> PTask
+                )
+
+            ( innerS, POk x ) ->
+                ( innerS, POk x )
+
+            ( innerS, PErr e ) ->
+                let
+                    (State stateFn) =
+                        ef e
+                in
+                stateFn innerS
+    )
+        |> State
 
 
 map : (a -> b) -> Imp s x a -> Imp s x b
@@ -167,6 +224,10 @@ map mf (State io) =
                 )
     )
         |> State
+
+
+
+-- More maps
 
 
 map2 :
@@ -244,59 +305,27 @@ map6 f p1 p2 p3 p4 p5 p6 =
         |> andMap p6
 
 
-andThen : (a -> Imp s x b) -> Imp s x a -> Imp s x b
-andThen mf (State io) =
-    (\s ->
-        case io s of
-            ( innerS, PTask t ) ->
-                ( innerS
-                , Task.andThen (\inner -> Task.succeed (andThen mf inner)) t
-                    |> PTask
-                )
 
-            ( innerS, POk x ) ->
-                let
-                    (State stateFn) =
-                        mf x
-                in
-                stateFn innerS
-
-            ( innerS, PErr e ) ->
-                ( innerS
-                , PErr e
-                )
-    )
-        |> State
+-- State management
 
 
-andMap : Imp s x a -> Imp s x (a -> b) -> Imp s x b
-andMap ma mf =
-    andThen (\f -> map f ma) mf
+get : Imp s x s
+get =
+    State (\s -> ( s, POk s ))
 
 
-onError : (x -> Imp s y a) -> Imp s x a -> Imp s y a
-onError ef (State io) =
-    (\s ->
-        case io s of
-            ( innerS, PTask t ) ->
-                ( innerS
-                , Task.onError
-                    (\e -> ef e |> Task.succeed)
-                    (t |> Task.map (onError ef))
-                    |> PTask
-                )
+put : s -> Imp s x ()
+put s =
+    State (\_ -> ( s, POk () ))
 
-            ( innerS, POk x ) ->
-                ( innerS, POk x )
 
-            ( innerS, PErr e ) ->
-                let
-                    (State stateFn) =
-                        ef e
-                in
-                stateFn innerS
-    )
-        |> State
+modify : (s -> s) -> Imp s x ()
+modify fn =
+    State (\s -> ( fn s, POk () ))
+
+
+
+-- Sequencing lists of imperatives
 
 
 sequence : List (Imp s x a) -> Imp s x (List a)
