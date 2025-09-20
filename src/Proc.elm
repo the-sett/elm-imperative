@@ -1,5 +1,5 @@
-module Imp exposing
-    ( Imp
+module Proc exposing
+    ( Proc
     , Program, program
     , pure, err, result, task, advance
     , andThen, andMap, onError, map
@@ -8,10 +8,10 @@ module Imp exposing
     , sequence
     )
 
-{-| Imp provides a structure that combines 3 things; `Result`, `Procedure` and the
+{-| Proc provides a structure that combines 3 things; `Result`, `Procedure` and the
 state monad. This helps you do stateful programming with IO and error handling.
 
-@docs Imp
+@docs Proc
 
 
 # Imperative programs
@@ -45,6 +45,8 @@ state monad. This helps you do stateful programming with IO and error handling.
 
 -}
 
+import Procedure
+import Procedure.Program as Program
 import Task
 
 
@@ -52,14 +54,16 @@ import Task
 -- The imperative structure
 
 
-{-| Imp combines `Result`, `Task` and the state monad together.
+{-| Proc combines `Result`, `Task` and the state monad together.
 -}
-type Imp s x a
+type Proc s x a
     = State (s -> ( s, T s x a ))
+    | PMsg Program.Msg
 
 
 type T s x a
-    = PTask (Task.Task x (Imp s x a))
+    = PTask (Task.Task x (Proc s x a))
+    | PProc (Procedure.Procedure x (Proc s x a))
     | POk a
     | PErr x
 
@@ -71,12 +75,12 @@ type T s x a
 {-| Imperative Elm programs.
 -}
 type alias Program flags model err res =
-    Platform.Program flags model (Imp model err res)
+    Platform.Program flags model (Proc model err res)
 
 
 {-| Builds an imperative program from flags, an initial model and an imperative program structure.
 -}
-program : flags -> (flags -> model) -> Imp model err res -> Program flags model err res
+program : flags -> (flags -> model) -> Proc model err res -> Program flags model err res
 program flags initFn io =
     Platform.worker
         { init = \_ -> eval io (initFn flags)
@@ -85,7 +89,7 @@ program flags initFn io =
         }
 
 
-eval : Imp s x a -> s -> ( s, Cmd (Imp s x a) )
+eval : Proc s x a -> s -> ( s, Cmd (Proc s x a) )
 eval (State io) state =
     case io state of
         ( innerS, PTask t ) ->
@@ -100,6 +104,21 @@ eval (State io) state =
                             err e
                 )
                 t
+            )
+
+        ( innerS, PProc p ) ->
+            ( innerS
+            , Procedure.try
+                identity
+                (\r ->
+                    case r of
+                        Ok x ->
+                            x
+
+                        Err e ->
+                            err e
+                )
+                p
             )
 
         ( innerS, POk x ) ->
@@ -117,35 +136,35 @@ eval (State io) state =
 -- Constructors
 
 
-{-| Wraps a value as an `Imp`, bringing a pure value into the imperative structure.
+{-| Wraps a value as an `Proc`, bringing a pure value into the imperative structure.
 -}
-pure : a -> Imp s x a
+pure : a -> Proc s x a
 pure val =
     (\s -> ( s, POk val ))
         |> State
 
 
-{-| Builds an error as an `Imp`, allowing errors in imperative programs. This is
+{-| Builds an error as an `Proc`, allowing errors in imperative programs. This is
 like the `throw` operation.
 -}
-err : x -> Imp s x a
+err : x -> Proc s x a
 err e =
     (\s -> ( s, PErr e ))
         |> State
 
 
-{-| Turns an Elm task into an `Imp`, allowing some IO operation to be run, and that
+{-| Turns an Elm task into an `Proc`, allowing some IO operation to be run, and that
 may produce errors.
 -}
-task : Task.Task x a -> Imp s x a
+task : Task.Task x a -> Proc s x a
 task t =
     (\s -> ( s, t |> Task.map pure |> PTask ))
         |> State
 
 
-{-| Convert `Result` into an `Imp`.
+{-| Convert `Result` into an `Proc`.
 -}
-result : Result x a -> Imp s x a
+result : Result x a -> Proc s x a
 result res =
     case res of
         Ok x ->
@@ -158,7 +177,7 @@ result res =
 {-| Given the current state of an imperative program, produce a new state and current
 value for the program.
 -}
-advance : (s -> ( s, a )) -> Imp s x a
+advance : (s -> ( s, a )) -> Proc s x a
 advance fn =
     (\s -> fn s |> Tuple.mapSecond POk)
         |> State
@@ -168,13 +187,13 @@ advance fn =
 -- Combinators for building imperative programs
 
 
-{-| Given an `Imp` allows a new `Imp` to be created based on its current value.
+{-| Given an `Proc` allows a new `Proc` to be created based on its current value.
 
 This allows imperative operations to be chained together, when the subsequent operation
 depends on the results of the one before.
 
 -}
-andThen : (a -> Imp s x b) -> Imp s x a -> Imp s x b
+andThen : (a -> Proc s x b) -> Proc s x a -> Proc s x b
 andThen mf (State io) =
     (\s ->
         case io s of
@@ -182,6 +201,12 @@ andThen mf (State io) =
                 ( innerS
                 , Task.andThen (\inner -> Task.succeed (andThen mf inner)) t
                     |> PTask
+                )
+
+            ( innerS, PProc p ) ->
+                ( innerS
+                , Procedure.andThen (\inner -> Procedure.provide (andThen mf inner)) p
+                    |> PProc
                 )
 
             ( innerS, POk x ) ->
@@ -199,23 +224,23 @@ andThen mf (State io) =
         |> State
 
 
-{-| Apply the function that is inside `Imp` to a value that is inside `Imp`. Return the result
-inside `Imp`. If one of the `Imp`s in on the error track, the resulting `Imp` will also be on the
+{-| Apply the function that is inside `Proc` to a value that is inside `Proc`. Return the result
+inside `Proc`. If one of the `Proc`s in on the error track, the resulting `Proc` will also be on the
 error track.
 -}
-andMap : Imp s x a -> Imp s x (a -> b) -> Imp s x b
+andMap : Proc s x a -> Proc s x (a -> b) -> Proc s x b
 andMap ma mf =
     andThen (\f -> map f ma) mf
 
 
-{-| Given an `Imp` allows a new `Imp` to be created based on it being on the error track and
+{-| Given an `Proc` allows a new `Proc` to be created based on it being on the error track and
 the value of the current error.
 
 This allows imperative operations that produce errors to be chained together, with the option to
 recover back onto the success track.
 
 -}
-onError : (x -> Imp s y a) -> Imp s x a -> Imp s y a
+onError : (x -> Proc s y a) -> Proc s x a -> Proc s y a
 onError ef (State io) =
     (\s ->
         case io s of
@@ -225,6 +250,14 @@ onError ef (State io) =
                     (\e -> ef e |> Task.succeed)
                     (t |> Task.map (onError ef))
                     |> PTask
+                )
+
+            ( innerS, PProc p ) ->
+                ( innerS
+                , Procedure.catch
+                    (\e -> ef e |> Procedure.provide)
+                    (p |> Procedure.map (onError ef))
+                    |> PProc
                 )
 
             ( innerS, POk x ) ->
@@ -240,15 +273,20 @@ onError ef (State io) =
         |> State
 
 
-{-| Applies a function the current value of an `Imp`, provided it is not on the error track.
+{-| Applies a function the current value of an `Proc`, provided it is not on the error track.
 -}
-map : (a -> b) -> Imp s x a -> Imp s x b
+map : (a -> b) -> Proc s x a -> Proc s x b
 map mf (State io) =
     (\s ->
         case io s of
             ( innerS, PTask t ) ->
                 ( innerS
                 , Task.andThen (\inner -> Task.succeed (map mf inner)) t |> PTask
+                )
+
+            ( innerS, PProc p ) ->
+                ( innerS
+                , Procedure.andThen (\inner -> Procedure.provide (map mf inner)) p |> PProc
                 )
 
             ( innerS, POk x ) ->
@@ -268,27 +306,27 @@ map mf (State io) =
 -- More maps
 
 
-{-| Applies a function to current values of two `Imp`s if both `Imp`s are not on the error track.
+{-| Applies a function to current values of two `Proc`s if both `Proc`s are not on the error track.
 -}
 map2 :
     (a -> b -> c)
-    -> Imp s x a
-    -> Imp s x b
-    -> Imp s x c
+    -> Proc s x a
+    -> Proc s x b
+    -> Proc s x c
 map2 f p1 p2 =
     pure f
         |> andMap p1
         |> andMap p2
 
 
-{-| Applies a function to many values of many `Imp`s if all `Imp`s are not on the error track.
+{-| Applies a function to many values of many `Proc`s if all `Proc`s are not on the error track.
 -}
 map3 :
     (a -> b -> c -> d)
-    -> Imp s x a
-    -> Imp s x b
-    -> Imp s x c
-    -> Imp s x d
+    -> Proc s x a
+    -> Proc s x b
+    -> Proc s x c
+    -> Proc s x d
 map3 f p1 p2 p3 =
     pure f
         |> andMap p1
@@ -296,15 +334,15 @@ map3 f p1 p2 p3 =
         |> andMap p3
 
 
-{-| Applies a function to many values of many `Imp`s if all `Imp`s are not on the error track.
+{-| Applies a function to many values of many `Proc`s if all `Proc`s are not on the error track.
 -}
 map4 :
     (a -> b -> c -> d -> e)
-    -> Imp s x a
-    -> Imp s x b
-    -> Imp s x c
-    -> Imp s x d
-    -> Imp s x e
+    -> Proc s x a
+    -> Proc s x b
+    -> Proc s x c
+    -> Proc s x d
+    -> Proc s x e
 map4 f p1 p2 p3 p4 =
     pure f
         |> andMap p1
@@ -313,16 +351,16 @@ map4 f p1 p2 p3 p4 =
         |> andMap p4
 
 
-{-| Applies a function to many values of many `Imp`s if all `Imp`s are not on the error track.
+{-| Applies a function to many values of many `Proc`s if all `Proc`s are not on the error track.
 -}
 map5 :
     (a -> b -> c -> d -> e -> f)
-    -> Imp s x a
-    -> Imp s x b
-    -> Imp s x c
-    -> Imp s x d
-    -> Imp s x e
-    -> Imp s x f
+    -> Proc s x a
+    -> Proc s x b
+    -> Proc s x c
+    -> Proc s x d
+    -> Proc s x e
+    -> Proc s x f
 map5 f p1 p2 p3 p4 p5 =
     pure f
         |> andMap p1
@@ -332,17 +370,17 @@ map5 f p1 p2 p3 p4 p5 =
         |> andMap p5
 
 
-{-| Applies a function to many values of many `Imp`s if all `Imp`s are not on the error track.
+{-| Applies a function to many values of many `Proc`s if all `Proc`s are not on the error track.
 -}
 map6 :
     (a -> b -> c -> d -> e -> f -> g)
-    -> Imp s x a
-    -> Imp s x b
-    -> Imp s x c
-    -> Imp s x d
-    -> Imp s x e
-    -> Imp s x f
-    -> Imp s x g
+    -> Proc s x a
+    -> Proc s x b
+    -> Proc s x c
+    -> Proc s x d
+    -> Proc s x e
+    -> Proc s x f
+    -> Proc s x g
 map6 f p1 p2 p3 p4 p5 p6 =
     pure f
         |> andMap p1
@@ -357,23 +395,23 @@ map6 f p1 p2 p3 p4 p5 p6 =
 -- State management
 
 
-{-| An `Imp` that gets the current state as the current value.
+{-| An `Proc` that gets the current state as the current value.
 -}
-get : Imp s x s
+get : Proc s x s
 get =
     State (\s -> ( s, POk s ))
 
 
-{-| An `Imp` that takes the given current state.
+{-| An `Proc` that takes the given current state.
 -}
-put : s -> Imp s x ()
+put : s -> Proc s x ()
 put s =
     State (\_ -> ( s, POk () ))
 
 
-{-| Applies a function to the current state to produce an `Imp` with a new current state.
+{-| Applies a function to the current state to produce an `Proc` with a new current state.
 -}
-modify : (s -> s) -> Imp s x ()
+modify : (s -> s) -> Proc s x ()
 modify fn =
     State (\s -> ( fn s, POk () ))
 
@@ -382,13 +420,13 @@ modify fn =
 -- Sequencing lists of imperatives
 
 
-{-| Given a list of `Imp`s, evaluates them all and produces a list of their current
+{-| Given a list of `Proc`s, evaluates them all and produces a list of their current
 values, provided that none of them switch to the error track.
 
 In the case where one or more of them produce errors, only the first error encountered
 in the list will become the error value of the result.
 
 -}
-sequence : List (Imp s x a) -> Imp s x (List a)
+sequence : List (Proc s x a) -> Proc s x (List a)
 sequence ios =
     List.foldr (map2 (::)) (pure []) ios
