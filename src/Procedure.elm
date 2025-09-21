@@ -63,7 +63,7 @@ fetch : ((a -> Msg) -> Cmd Msg) -> Procedure e a
 fetch generator =
     Internal.Procedure <|
         \_ _ tagger ->
-            generator <| tagger << Ok
+            (tagger << Ok) |> generator
 
 
 {-| Generate a procedure that gets the result produced by executing some `Cmd`.
@@ -168,7 +168,7 @@ This will result in `StringTagger "Hello"`.
 -}
 provide : a -> Procedure e a
 provide =
-    fromTask << Task.succeed
+    Task.succeed >> fromTask
 
 
 {-| Generate a procedure that runs a task.
@@ -222,7 +222,7 @@ then the result would be `Err "File is too long!"`.
 -}
 break : e -> Procedure e a
 break =
-    fromTask << Task.fail
+    Task.fail >> fromTask
 
 
 {-| Generate a new procedure when some previous procedure results in an error, usually
@@ -313,7 +313,7 @@ collect procedures =
             emptyProcedure
 
         procedure :: remainingProcedures ->
-            List.foldl (andThen << addToList) (addToList procedure []) remainingProcedures
+            List.foldl (addToList >> andThen) (addToList procedure []) remainingProcedures
 
 
 addToList : Procedure e a -> List a -> Procedure e (List a)
@@ -332,7 +332,7 @@ addToList procedure collector =
 
 emptyProcedure : Procedure e a
 emptyProcedure =
-    Internal.Procedure <| \_ _ _ -> Cmd.none
+    (\_ _ _ -> Cmd.none) |> Internal.Procedure
 
 
 {-| Generate a procedure that transforms the value of the previous procedure.
