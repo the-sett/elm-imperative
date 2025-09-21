@@ -51,18 +51,18 @@ type alias ChannelKey =
 
 {-| Represents a method for receiving messages from the outside world.
 -}
-type Channel a msg
+type Channel a
     = Channel
-        { request : ChannelKey -> Cmd msg
-        , subscription : (a -> msg) -> Sub msg
+        { request : ChannelKey -> Cmd Msg
+        , subscription : (a -> Msg) -> Sub Msg
         , shouldAccept : ChannelKey -> a -> Bool
         }
 
 
 {-| Represents a request to open a channel.
 -}
-type ChannelRequest msg
-    = ChannelRequest (ChannelKey -> Cmd msg)
+type ChannelRequest
+    = ChannelRequest (ChannelKey -> Cmd Msg)
 
 
 {-| Open a channel by sending a command. Use this in conjunction with `connect` to define a channel.
@@ -80,7 +80,7 @@ On the JS side, your port command could take the channel key and pass it back wh
 In your channel setup, you would filter messages by this key. See `filter` for an example.
 
 -}
-open : (ChannelKey -> Cmd msg) -> ChannelRequest msg
+open : (ChannelKey -> Cmd Msg) -> ChannelRequest
 open =
     ChannelRequest
 
@@ -88,7 +88,7 @@ open =
 {-| Define a channel by providing a subscription to receive messages after
 you use `open` to send a command that opens a channel.
 -}
-connect : ((a -> msg) -> Sub msg) -> ChannelRequest msg -> Channel a msg
+connect : ((a -> Msg) -> Sub Msg) -> ChannelRequest -> Channel a
 connect generator (ChannelRequest requestGenerator) =
     Channel
         { request = requestGenerator
@@ -120,7 +120,7 @@ ones to your update function. You could accomplish that like so:
         |> Procedure.run ProcMsg PressedKey
 
 -}
-join : ((a -> msg) -> Sub msg) -> Channel a msg
+join : ((a -> Msg) -> Sub Msg) -> Channel a
 join generator =
     Channel
         { request = defaultRequest
@@ -147,7 +147,7 @@ with channels that utilize this subscription are running simultaneously.
 Note: Calling filter multiple times on a channel simply replaces any existing filter on that channel.
 
 -}
-filter : (ChannelKey -> a -> Bool) -> Channel a msg -> Channel a msg
+filter : (ChannelKey -> a -> Bool) -> Channel a -> Channel a
 filter predicate (Channel channel) =
     Channel
         { channel | shouldAccept = predicate }
@@ -165,7 +165,7 @@ you could do the following:
         |> Procedure.run ProcedureTagger DataTagger
 
 -}
-acceptOne : Channel a msg -> Procedure e a msg
+acceptOne : Channel a -> Procedure e a
 acceptOne =
     always True |> acceptUntil
 
@@ -185,7 +185,7 @@ Then, as numbers come in through `mySubscription`, a `StringTagger` message will
 that tags the even numbers as a string.
 
 -}
-accept : Channel a msg -> Procedure e a msg
+accept : Channel a -> Procedure e a
 accept =
     always False |> acceptUntil
 
@@ -209,7 +209,7 @@ channel will close and process no more messages. The last message sent by this p
 be `StringTagger "20"`.
 
 -}
-acceptUntil : (a -> Bool) -> Channel a msg -> Procedure e a msg
+acceptUntil : (a -> Bool) -> Channel a -> Procedure e a
 acceptUntil shouldUnsubscribe (Channel channel) =
     Procedure <|
         \procId msgTagger resultTagger ->
@@ -238,7 +238,7 @@ acceptUntil shouldUnsubscribe (Channel channel) =
                             |> resultTagger
             in
             Task.succeed subGenerator
-                |> Task.perform (msgTagger << Subscribe procId requestCommandMsg)
+                |> Task.perform (Subscribe procId requestCommandMsg >> msgTagger)
 
 
 channelKey : ChannelId -> ChannelKey
@@ -246,7 +246,7 @@ channelKey channelId =
     "Channel-" ++ String.fromInt channelId
 
 
-defaultRequest : ChannelKey -> Cmd msg
+defaultRequest : ChannelKey -> Cmd Msg
 defaultRequest _ =
     Cmd.none
 

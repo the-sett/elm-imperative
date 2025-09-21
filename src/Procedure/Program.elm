@@ -47,10 +47,10 @@ type alias Registry =
 -}
 init : Model
 init =
-    Model <|
-        { nextId = 0
-        , channels = Dict.empty
-        }
+    { nextId = 0
+    , channels = Dict.empty
+    }
+        |> Model
 
 
 {-| Update the state of running procedures.
