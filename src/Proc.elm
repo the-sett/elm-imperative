@@ -108,7 +108,7 @@ type alias Registry =
 {-| Imperative Elm programs.
 -}
 type alias Program flags model err res =
-    Platform.Program flags model (Proc model err res)
+    Platform.Program flags (PRegistry model) (Proc model err res)
 
 
 {-| Builds an imperative program from flags, an initial model and an imperative program structure.
@@ -116,11 +116,17 @@ type alias Program flags model err res =
 program : flags -> (flags -> model) -> Proc model err res -> Program flags model err res
 program flags initFn io =
     Platform.worker
-        --{ init = \_ -> eval io (initFn flags)
-        --, update = eval
-        --, subscriptions = \_ -> Sub.none
-        --}
-        (Debug.todo "")
+        { init = \_ -> eval io (initFn flags |> initp)
+        , update = eval
+        , subscriptions = \_ -> Sub.none
+        }
+
+
+initp s =
+    { nextId = 0
+    , channels = Dict.empty
+    , state = s
+    }
 
 
 eval : Proc s x a -> PRegistry s -> ( PRegistry s, Cmd (Proc s x a) )
