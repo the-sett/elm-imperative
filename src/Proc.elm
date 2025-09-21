@@ -58,7 +58,6 @@ import Task
 -}
 type Proc s x a
     = State (s -> ( s, T s x a ))
-    | PMsg Program.Msg
 
 
 type T s x a
@@ -108,17 +107,18 @@ eval (State io) state =
 
         ( innerS, PProc p ) ->
             ( innerS
-            , Procedure.try
-                identity
-                (\r ->
-                    case r of
-                        Ok x ->
-                            x
-
-                        Err e ->
-                            err e
-                )
-                p
+              --, Procedure.try
+              --    identity
+              --    (\r ->
+              --        case r of
+              --            Ok x ->
+              --                x
+              --
+              --            Err e ->
+              --                err e
+              --    )
+              --    p
+            , Debug.todo ""
             )
 
         ( innerS, POk x ) ->
