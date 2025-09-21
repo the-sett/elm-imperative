@@ -45,8 +45,8 @@ state monad. This helps you do stateful programming with IO and error handling.
 
 -}
 
-import Procedure
-import Task
+import Dict exposing (Dict)
+import Task exposing (Task)
 
 
 
@@ -61,7 +61,6 @@ type Proc s x a
 
 type T s x a
     = PTask (Task.Task x (Proc s x a))
-    | PProc (Procedure.Procedure x (Proc s x a))
     | POk a
     | PErr x
 
@@ -102,22 +101,6 @@ eval (State io) state =
                             err e
                 )
                 t
-            )
-
-        ( innerS, PProc p ) ->
-            ( innerS
-              --, Procedure.try
-              --    identity
-              --    (\r ->
-              --        case r of
-              --            Ok x ->
-              --                x
-              --
-              --            Err e ->
-              --                err e
-              --    )
-              --    p
-            , Debug.todo ""
             )
 
         ( innerS, POk x ) ->
@@ -202,12 +185,6 @@ andThen mf (State io) =
                     |> PTask
                 )
 
-            ( innerS, PProc p ) ->
-                ( innerS
-                , Procedure.andThen (\inner -> Procedure.provide (andThen mf inner)) p
-                    |> PProc
-                )
-
             ( innerS, POk x ) ->
                 let
                     (State stateFn) =
@@ -251,14 +228,6 @@ onError ef (State io) =
                     |> PTask
                 )
 
-            ( innerS, PProc p ) ->
-                ( innerS
-                , Procedure.catch
-                    (\e -> ef e |> Procedure.provide)
-                    (p |> Procedure.map (onError ef))
-                    |> PProc
-                )
-
             ( innerS, POk x ) ->
                 ( innerS, POk x )
 
@@ -281,11 +250,6 @@ map mf (State io) =
             ( innerS, PTask t ) ->
                 ( innerS
                 , Task.andThen (\inner -> Task.succeed (map mf inner)) t |> PTask
-                )
-
-            ( innerS, PProc p ) ->
-                ( innerS
-                , Procedure.andThen (\inner -> Procedure.provide (map mf inner)) p |> PProc
                 )
 
             ( innerS, POk x ) ->
@@ -429,3 +393,403 @@ in the list will become the error value of the result.
 sequence : List (Proc s x a) -> Proc s x (List a)
 sequence ios =
     List.foldr (map2 (::)) (pure []) ios
+
+
+
+-- Internal
+
+
+type Msg
+    = Initiate (Int -> Cmd Msg)
+    | Execute Int (Cmd Msg)
+    | Subscribe Int (Int -> Msg) (Int -> Sub Msg)
+    | Unsubscribe Int Int Msg
+    | Continue
+
+
+type Procedure e a
+    = Procedure (Int -> (Result e a -> Msg) -> Cmd Msg)
+
+
+
+-- Procedure
+
+
+fetch : ((a -> Msg) -> Cmd Msg) -> Procedure e a
+fetch generator =
+    (\_ tagger ->
+        (Ok >> tagger) |> generator
+    )
+        |> Procedure
+
+
+fetchResult : ((Result e a -> Msg) -> Cmd Msg) -> Procedure e a
+fetchResult generator =
+    (\_ tagger ->
+        generator tagger
+    )
+        |> Procedure
+
+
+do : Cmd Msg -> Procedure Never ()
+do command =
+    (\procId resultTagger ->
+        Task.succeed ()
+            |> Task.perform
+                (\_ ->
+                    let
+                        nextCommand =
+                            Task.succeed ()
+                                |> Task.perform (Ok >> resultTagger)
+                    in
+                    Cmd.batch [ command, nextCommand ]
+                        |> Execute procId
+                )
+    )
+        |> Procedure
+
+
+endWith : Cmd Msg -> Procedure Never Never
+endWith command =
+    (\procId _ ->
+        Task.succeed ()
+            |> Task.perform
+                (\_ ->
+                    Execute procId command
+                )
+    )
+        |> Procedure
+
+
+provide : a -> Procedure e a
+provide =
+    Task.succeed >> fromTask
+
+
+fromTask : Task e a -> Procedure e a
+fromTask t =
+    (\_ resultTagger ->
+        Task.attempt resultTagger t
+    )
+        |> Procedure
+
+
+break : e -> Procedure e a
+break =
+    Task.fail >> fromTask
+
+
+catch : (e -> Procedure f a) -> Procedure e a -> Procedure f a
+catch generator procedure =
+    (\aResult ->
+        case aResult of
+            Ok aData ->
+                provide aData
+
+            Err eData ->
+                generator eData
+    )
+        |> next procedure
+
+
+
+--andThen : (a -> Procedure e b) -> Procedure e a -> Procedure e b
+--andThen generator procedure =
+--    (\aResult ->
+--        case aResult of
+--            Ok aData ->
+--                generator aData
+--
+--            Err eData ->
+--                break eData
+--    )
+--        |> next procedure
+--collect : List (Procedure e a) -> Procedure e (List a)
+--collect procedures =
+--    case procedures of
+--        [] ->
+--            emptyProcedure
+--
+--        procedure :: remainingProcedures ->
+--            List.foldl (addToList >> andThen) (addToList procedure []) remainingProcedures
+
+
+addToList : Procedure e a -> List a -> Procedure e (List a)
+addToList procedure collector =
+    (\aResult ->
+        case aResult of
+            Ok aData ->
+                [ aData ]
+                    |> List.append collector
+                    |> provide
+
+            Err eData ->
+                break eData
+    )
+        |> next procedure
+
+
+emptyProcedure : Procedure e a
+emptyProcedure =
+    (\_ _ -> Cmd.none) |> Procedure
+
+
+
+--map : (a -> b) -> Procedure e a -> Procedure e b
+--map mapper =
+--    andThen (mapper >> provide)
+--
+--
+--map2 : (a -> b -> c) -> Procedure e a -> Procedure e b -> Procedure e c
+--map2 mapper procedureA procedureB =
+--    procedureA
+--        |> andThen
+--            (\aData ->
+--                procedureB
+--                    |> map (mapper aData)
+--            )
+--
+--
+--map3 : (a -> b -> c -> d) -> Procedure e a -> Procedure e b -> Procedure e c -> Procedure e d
+--map3 mapper procedureA procedureB procedureC =
+--    procedureA
+--        |> andThen
+--            (\aData ->
+--                map2 (mapper aData) procedureB procedureC
+--            )
+--
+--
+
+
+mapError : (e -> f) -> Procedure e a -> Procedure f a
+mapError mapper procedure =
+    (\aResult ->
+        case aResult of
+            Ok aData ->
+                provide aData
+
+            Err eData ->
+                mapper eData
+                    |> break
+    )
+        |> next procedure
+
+
+next : Procedure e a -> (Result e a -> Procedure f b) -> Procedure f b
+next (Procedure procedure) resultMapper =
+    (\procId tagger ->
+        (\aResult ->
+            let
+                (Procedure nextProcedure) =
+                    resultMapper aResult
+            in
+            nextProcedure procId tagger
+                |> Execute procId
+        )
+            |> procedure procId
+    )
+        |> Procedure
+
+
+try : (Result e a -> Msg) -> Procedure e a -> Cmd Msg
+try tagger (Procedure procedure) =
+    Task.succeed (\procId -> procedure procId tagger)
+        |> Task.perform Initiate
+
+
+run : (a -> Msg) -> Procedure Never a -> Cmd Msg
+run tagger =
+    try
+        (\res ->
+            case res of
+                Ok data ->
+                    tagger data
+
+                Err e ->
+                    never e
+        )
+
+
+
+-- Channel
+
+
+type Channel a
+    = Channel
+        { request : String -> Cmd Msg
+        , subscription : (a -> Msg) -> Sub Msg
+        , shouldAccept : String -> a -> Bool
+        }
+
+
+type ChannelRequest
+    = ChannelRequest (String -> Cmd Msg)
+
+
+open : (String -> Cmd Msg) -> ChannelRequest
+open =
+    ChannelRequest
+
+
+connect : ((a -> Msg) -> Sub Msg) -> ChannelRequest -> Channel a
+connect generator (ChannelRequest requestGenerator) =
+    Channel
+        { request = requestGenerator
+        , subscription = generator
+        , shouldAccept = defaultPredicate
+        }
+
+
+join : ((a -> Msg) -> Sub Msg) -> Channel a
+join generator =
+    Channel
+        { request = defaultRequest
+        , subscription = generator
+        , shouldAccept = defaultPredicate
+        }
+
+
+filter : (String -> a -> Bool) -> Channel a -> Channel a
+filter predicate (Channel channel) =
+    Channel
+        { channel | shouldAccept = predicate }
+
+
+acceptOne : Channel a -> Procedure e a
+acceptOne =
+    always True |> acceptUntil
+
+
+accept : Channel a -> Procedure e a
+accept =
+    always False |> acceptUntil
+
+
+acceptUntil : (a -> Bool) -> Channel a -> Procedure e a
+acceptUntil shouldUnsubscribe (Channel channel) =
+    (\procId resultTagger ->
+        let
+            requestCommandMsg channelId =
+                channel.request (channelKey channelId)
+                    |> Execute procId
+
+            subGenerator channelId =
+                (\aData ->
+                    if channel.shouldAccept (channelKey channelId) aData then
+                        generateMsg channelId aData
+
+                    else
+                        Continue
+                )
+                    |> channel.subscription
+
+            generateMsg channelId aData =
+                if shouldUnsubscribe aData then
+                    Ok aData
+                        |> resultTagger
+                        |> Unsubscribe procId channelId
+
+                else
+                    Ok aData
+                        |> resultTagger
+        in
+        Task.succeed subGenerator
+            |> Task.perform (Subscribe procId requestCommandMsg)
+    )
+        |> Procedure
+
+
+channelKey : Int -> String
+channelKey channelId =
+    "Channel-" ++ String.fromInt channelId
+
+
+defaultRequest : String -> Cmd Msg
+defaultRequest _ =
+    Cmd.none
+
+
+defaultPredicate : String -> a -> Bool
+defaultPredicate _ _ =
+    True
+
+
+
+-- Program
+
+
+type Model
+    = Model Registry
+
+
+type alias Registry =
+    { nextId : Int
+    , channels : Dict Int (Sub Msg)
+    }
+
+
+init : Model
+init =
+    { nextId = 0
+    , channels = Dict.empty
+    }
+        |> Model
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg (Model registry) =
+    updateProcedures msg registry
+        |> Tuple.mapFirst Model
+
+
+updateProcedures : Msg -> Registry -> ( Registry, Cmd Msg )
+updateProcedures msg registry =
+    case msg of
+        Initiate generator ->
+            ( { registry | nextId = registry.nextId + 1 }
+            , generator registry.nextId
+            )
+
+        Execute _ cmd ->
+            ( registry
+            , cmd
+            )
+
+        Subscribe _ messageGenerator subGenerator ->
+            ( addChannel subGenerator registry
+            , messageGenerator registry.nextId
+                |> sendMessage
+            )
+
+        Unsubscribe _ channelId nextMessage ->
+            ( deleteChannel channelId registry
+            , sendMessage nextMessage
+            )
+
+        Continue ->
+            ( registry, Cmd.none )
+
+
+addChannel : (Int -> Sub Msg) -> Registry -> Registry
+addChannel subGenerator registry =
+    { registry
+        | nextId = registry.nextId + 1
+        , channels = Dict.insert registry.nextId (subGenerator registry.nextId) registry.channels
+    }
+
+
+deleteChannel : Int -> Registry -> Registry
+deleteChannel channelId procModel =
+    { procModel | channels = Dict.remove channelId procModel.channels }
+
+
+sendMessage : Msg -> Cmd Msg
+sendMessage msg =
+    Task.succeed ()
+        |> Task.perform (always msg)
+
+
+subscriptions : Model -> Sub Msg
+subscriptions (Model registry) =
+    Dict.values registry.channels
+        |> Sub.batch
