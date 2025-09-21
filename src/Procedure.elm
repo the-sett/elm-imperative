@@ -1,64 +1,31 @@
 module Procedure exposing
     ( Procedure
-    , run, try
-    , provide, fetch, fetchResult, collect, fromTask, break, do, endWith
-    , andThen, catch
-    , map, map2, map3, mapError
+    , andThen
+    , break
+    , catch
+    , collect
+    , do
+    , endWith
+    , fetch
+    , fetchResult
+    , fromTask
+    , map
+    , map2
+    , map3
+    , mapError
+    , provide
+    , run
+    , try
     )
-
-{-| Orchestrate commands, subscriptions, and tasks.
-
-@docs Procedure
-
-
-# Execute a Procedure
-
-@docs run, try
-
-
-# Basic Procedures
-
-@docs provide, fetch, fetchResult, collect, fromTask, break, do, endWith
-
-
-# Build a Procedure
-
-@docs andThen, catch
-
-
-# Map the Output of a Procedure
-
-@docs map, map2, map3, mapError
-
--}
 
 import Procedure.Internal as Internal exposing (Msg(..))
 import Task exposing (Task)
 
 
-{-| Represents some sequence of commands, subscriptions, or tasks that ultimately results in some value.
--}
 type alias Procedure e a =
     Internal.Procedure e a
 
 
-{-| Generate a procedure that gets the value produced by executing some `Cmd`.
-
-For example, if you wanted to have the user select a file and then convert
-that to a string, you could do the following:
-
-    Procedure.fetch (File.Select.file [ "application/zip" ])
-        |> Procedure.andThen
-            (\file ->
-                File.toString file
-                    |> Procedure.fromTask
-            )
-        |> Procedure.run ProcedureTagger StringTagger
-
-Note that only some commands produce a value directly. To execute those commands
-that do not produce a value, use `do`.
-
--}
 fetch : ((a -> Msg) -> Cmd Msg) -> Procedure e a
 fetch generator =
     (\_ _ tagger ->
@@ -67,31 +34,6 @@ fetch generator =
         |> Internal.Procedure
 
 
-{-| Generate a procedure that gets the result produced by executing some `Cmd`.
-
-For example, if you wanted to make an Http request and then map the response,
-you could do the following:
-
-    Procedure.fetchResult
-        (\tagger ->
-            Http.get
-                { url = "http://fun.com/fun.html"
-                , expect = Http.expectString tagger
-                }
-        )
-        |> Procedure.map
-            (\words ->
-                "Fun stuff: " ++ words
-            )
-        |> Procedure.catch
-            (\error ->
-                Procedure.provide "No Response"
-            )
-        |> Procedure.run ProcedureTagger StringTagger
-
-If the Http request fails, then the result will be: `No response`.
-
--}
 fetchResult : ((Result e a -> Msg) -> Cmd Msg) -> Procedure e a
 fetchResult generator =
     (\_ _ tagger ->
@@ -100,18 +42,6 @@ fetchResult generator =
         |> Internal.Procedure
 
 
-{-| Generate a procedure that executes a `Cmd` that does not produce any value directly.
-
-Use `do` to execute port functions that generate `Cmd` values.
-
-    Procedure.do myFunPortCommand
-        |> Procedure.map (\_ -> "We did it!")
-        |> Procedure.run ProcedureTagger StringTagger
-
-If you want to send a port command and expect a response later via some subscription, use
-a `Channel`.
-
--}
 do : Cmd Msg -> Procedure Never ()
 do command =
     (\procId msgTagger resultTagger ->
@@ -131,24 +61,6 @@ do command =
         |> Internal.Procedure
 
 
-{-| Generate a procedure that runs a command and states that no further value will be provided,
-effectively ending the procedure.
-
-Use this function when you need to end a procedure with a command that produces no message
-directly, such as a port command, and you don't want to add a `NoOp` case to your update function.
-
-For example, this procedure gets the current time and sends it out via a port (called `sendMillisOut` in this
-case), and never produces a message for the update function.
-
-    Procedure.fromTask Task.now
-        |> Procedure.map Time.posixToMillis
-        |> Procedure.andThen
-            (\millis ->
-                Procedure.endWith <| sendMillisOut millis
-            )
-        |> Procedure.run ProcedureMsg never
-
--}
 endWith : Cmd Msg -> Procedure Never Never
 endWith command =
     (\procId msgTagger _ ->
@@ -162,36 +74,11 @@ endWith command =
         |> Internal.Procedure
 
 
-{-| Generate a procedure that simply provides a value.
-
-    Procedure.provide "Hello!"
-        |> Procedure.run ProcedureTagger StringTagger
-
-This will result in `StringTagger "Hello"`.
-
--}
 provide : a -> Procedure e a
 provide =
     Task.succeed >> fromTask
 
 
-{-| Generate a procedure that runs a task.
-
-For example, if you wanted to have the user select a file and then convert
-that to a string, you could do the following:
-
-    Procedure.fetch (File.Select.file [ "application/zip" ])
-        |> Procedure.andThen
-            (\file ->
-                File.toString file
-                    |> Procedure.fromTask
-            )
-        |> Procedure.run ProcedureTagger StringTagger
-
-If the task fails, the procedure will break at this point, just as
-if `Procedure.break` had been used.
-
--}
 fromTask : Task e a -> Procedure e a
 fromTask task =
     (\_ _ resultTagger ->
@@ -200,69 +87,11 @@ fromTask task =
         |> Internal.Procedure
 
 
-{-| Generate a procedure that breaks out of the current procedure.
-
-You can use this to stop a procedure early:
-
-    Procedure.fetch (File.Select.file [ "text/plain" ])
-        |> Procedure.andThen
-            (\file ->
-                File.toString file
-                    |> Procedure.fromTask
-            )
-        |> Procedure.andThen
-            (\text ->
-                if String.length text > 100 then
-                    Procedure.break "File is too long!"
-
-                else
-                    Procedure.provide text
-            )
-        |> Procedure.map (\text -> doSomethingWithTheText text)
-        |> Procedure.try ProcedureTagger StringResultTagger
-
-where `StringResultTagger` tags a `Result String String`. If the break is triggered,
-then the result would be `Err "File is too long!"`.
-
--}
 break : e -> Procedure e a
 break =
     Task.fail >> fromTask
 
 
-{-| Generate a new procedure when some previous procedure results in an error, usually
-do to processing a `break` procedure.
-
-For example, you could check the result of some data
-and then break to skip the next steps until you reach a `catch` step.
-
-    Procedure.fetch someCommand
-        |> Procedure.andThen
-            (\data ->
-                if data.message == "Success" then
-                    Procedure.provide data
-
-                else
-                    Procedure.break data.message
-            )
-        |> Procedure.andThen
-            (\data ->
-                Channel.send (somePortCommand data)
-                    |> Channel.receive somePortSubscription
-                    |> Channel.await
-            )
-        |> Procedure.catch
-            (\errorData ->
-                Procedure.provide "Some default message"
-            )
-        |> Procedure.map (\data -> data ++ "!")
-        |> Procedure.run ProcedureTagger StringTagger
-
-If the data fetched via `someCommand` is deemed not successful, then
-the next steps will be skipped and the result of this procedure will
-be `StringTagger "Some default message!"`.
-
--}
 catch : (e -> Procedure f a) -> Procedure e a -> Procedure f a
 catch generator procedure =
     (\aResult ->
@@ -276,18 +105,6 @@ catch generator procedure =
         |> next procedure
 
 
-{-| Generate a new procedure based on the result of the previous procedure.
-
-    Procedure.provide "An awesome value"
-        |> Procedure.andThen
-            (\data ->
-                Procedure.provide <| data ++ "!!!"
-            )
-        |> Procedure.run ProcedureTagger StringTagger
-
-Then the result would be `StringTagger "An awesome value!!!"`.
-
--}
 andThen : (a -> Procedure e b) -> Procedure e a -> Procedure e b
 andThen generator procedure =
     (\aResult ->
@@ -301,18 +118,6 @@ andThen generator procedure =
         |> next procedure
 
 
-{-| Generate a procedure that collects the results of a list of procedures.
-
-    Procedure.collect
-        [ Procedure.provide "One"
-        , Procedure.provide "Two"
-        , Procedure.provide "Three"
-        ]
-        |> Procedure.run ProcedureTagger ListStringTagger
-
-Then the result would be `ListStringTagger [ "One", "Two", "Three" ]`.
-
--}
 collect : List (Procedure e a) -> Procedure e (List a)
 collect procedures =
     case procedures of
@@ -343,39 +148,11 @@ emptyProcedure =
     (\_ _ _ -> Cmd.none) |> Internal.Procedure
 
 
-{-| Generate a procedure that transforms the value of the previous procedure.
-
-    Procedure.collect
-        [ Procedure.provide "One"
-        , Procedure.provide "Two"
-        , Procedure.provide "Three"
-        ]
-        |> Procedure.map (String.join ", ")
-        |> Procedure.run ProcedureTagger StringTagger
-
-Then the result would be `StringTagger "One, Two, Three"`.
-
--}
 map : (a -> b) -> Procedure e a -> Procedure e b
 map mapper =
     andThen (mapper >> provide)
 
 
-{-| Generate a procedure that provides a new value based on the values of two other procedures.
-
-    Procedure.map2
-        (\a b -> a ++ " AND " ++ b)
-        (Procedure.provide "One")
-        (Procedure.provide "Two")
-        |> Procedure.run ProcedureTagger StringTagger
-
-Then the result would be \`StringTagger "One AND Two".
-
-Note: `map2` executes each procedure in order. The second procedure will be executed only
-if the first succeeds; if the first fails, then the whole procedure will fail. This follows
-the behavior of `Task.map2` in the core library.
-
--}
 map2 : (a -> b -> c) -> Procedure e a -> Procedure e b -> Procedure e c
 map2 mapper procedureA procedureB =
     procedureA
@@ -386,11 +163,6 @@ map2 mapper procedureA procedureB =
             )
 
 
-{-| Generate a procedure that provides a new value based on the values of three other procedures.
-
-Note: `map3` executes each procedure in order. See [map2](#map2) for more details.
-
--}
 map3 : (a -> b -> c -> d) -> Procedure e a -> Procedure e b -> Procedure e c -> Procedure e d
 map3 mapper procedureA procedureB procedureC =
     procedureA
@@ -400,18 +172,6 @@ map3 mapper procedureA procedureB procedureC =
             )
 
 
-{-| Generate a procedure that transforms the error value of a previous procedure.
-
-    Procedure.provide "Start"
-        |> Procedure.andThen (\_ -> Procedure.break "Oops")
-        |> Procedure.mapError (\err -> err ++ "???")
-        |> Procedure.try ProcedureTagger ResultTagger
-
-Then the result would be `Err "Oops???"`.
-
-Note: Error values can be set explicitly by using `break`.
-
--}
 mapError : (e -> f) -> Procedure e a -> Procedure f a
 mapError mapper procedure =
     (\aResult ->
@@ -442,24 +202,12 @@ next (Internal.Procedure procedure) resultMapper =
         |> Internal.Procedure
 
 
-{-| Execute a procedure that may fail.
-
-Note: The first argument tags a `Procedure.Program.Msg` as a `Msg` in your application.
-The second argument tags the result of the Procedure as a `Msg` in your application.
-
--}
 try : (Msg -> Msg) -> (Result e a -> Msg) -> Procedure e a -> Cmd Msg
 try msgTagger tagger (Internal.Procedure procedure) =
     Task.succeed (\procId -> procedure procId msgTagger tagger)
         |> Task.perform (Initiate >> msgTagger)
 
 
-{-| Execute a procedure that cannot fail.
-
-Note: The first argument tags a `Procedure.Program.Msg` as a `Msg` in your application.
-The second argument tags the value produced by the Procedure as a `Msg` in your application.
-
--}
 run : (Msg -> Msg) -> (a -> Msg) -> Procedure Never a -> Cmd Msg
 run msgTagger tagger =
     try msgTagger

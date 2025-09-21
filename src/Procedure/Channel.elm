@@ -1,46 +1,19 @@
 module Procedure.Channel exposing
     ( Channel
-    , join
-    , ChannelRequest, open, connect
+    , ChannelRequest
+    , accept
+    , acceptOne
+    , acceptUntil
+    , connect
     , filter
-    , accept, acceptOne, acceptUntil
+    , join
+    , open
     )
-
-{-| A channel represents a method for receiving messages from the outside world.
-
-@docs Channel
-
-
-# Define a Channel
-
-You can define a channel that simply listens for messages on a subscription.
-
-@docs join
-
----
-
-You can also define a channel by providing a command and a subscription to receive messages in response.
-
-@docs String, ChannelRequest, open, connect
-
-
-# Work with a Channel
-
-@docs filter
-
-
-# Use a Channel in a Procedure
-
-@docs accept, acceptOne, acceptUntil
-
--}
 
 import Procedure.Internal exposing (Msg(..), Procedure(..))
 import Task
 
 
-{-| Represents a method for receiving messages from the outside world.
--}
 type Channel a
     = Channel
         { request : String -> Cmd Msg
@@ -49,35 +22,15 @@ type Channel a
         }
 
 
-{-| Represents a request to open a channel.
--}
 type ChannelRequest
     = ChannelRequest (String -> Cmd Msg)
 
 
-{-| Open a channel by sending a command. Use this in conjunction with `connect` to define a channel.
-
-For example, you might need to send a command over a port and then wait for a response via a port subscription.
-You could accomplish that like so:
-
-    Channel.open (\_ -> myPortCommand)
-        |> Channel.connect myPortSubscription
-        |> Channel.acceptOne
-        |> Procedure.run ProcedureTagger DataTagger
-
-Use the provided `String` if you need something to connect subscription messages with the command that opens the channel.
-On the JS side, your port command could take the channel key and pass it back when supplying a subscription message.
-In your channel setup, you would filter messages by this key. See `filter` for an example.
-
--}
 open : (String -> Cmd Msg) -> ChannelRequest
 open =
     ChannelRequest
 
 
-{-| Define a channel by providing a subscription to receive messages after
-you use `open` to send a command that opens a channel.
--}
 connect : ((a -> Msg) -> Sub Msg) -> ChannelRequest -> Channel a
 connect generator (ChannelRequest requestGenerator) =
     Channel
@@ -87,29 +40,6 @@ connect generator (ChannelRequest requestGenerator) =
         }
 
 
-{-| Define a channel by providing a subscription to receive messages.
-
-For example, you might want to listen for key presses but only send certain
-ones to your update function. You could accomplish that like so:
-
-    Channel.join
-        (\tagger ->
-            Decode.map tagger keyDecoder
-                |> Browser.Events.onKeyPress
-        )
-        |> Channel.filter
-            (\_ keyPress ->
-                keyPress
-                    == "Z"
-                    || keyPress
-                    == "X"
-                    || keyPress
-                    == "Y"
-            )
-        |> Channel.acceptUntil (\_ -> False)
-        |> Procedure.run ProcMsg PressedKey
-
--}
 join : ((a -> Msg) -> Sub Msg) -> Channel a
 join generator =
     Channel
@@ -119,86 +49,22 @@ join generator =
         }
 
 
-{-| Filter messages received by whatever subscription is listening on this channel.
-
-For example, you might need to send a command over a port and then wait for a response via a port subscription.
-You could accomplish that like so:
-
-    Channel.open (\key -> myPortCommand key)
-        |> Channel.connect myPortSubscription
-        |> Channel.filter (\key data -> data.key == key)
-        |> Channel.acceptOne
-        |> Procedure.run ProcedureTagger DataTagger
-
-In this example, we pass the channel key through the port and use it to filter incoming subscription messages. This
-allows us to associate the messages we receive with a particular channel (and procedure), in case multiple procedures
-with channels that utilize this subscription are running simultaneously.
-
-Note: Calling filter multiple times on a channel simply replaces any existing filter on that channel.
-
--}
 filter : (String -> a -> Bool) -> Channel a -> Channel a
 filter predicate (Channel channel) =
     Channel
         { channel | shouldAccept = predicate }
 
 
-{-| Generate a procedure that accepts the first message to be processed from a channel. After
-that message is processed, the channel is closed.
-
-For example, if you wanted to send a request via a port command and wait for a response on some port subscription,
-you could do the following:
-
-    Channel.open (\_ -> myPortCommand)
-        |> Channel.connect myPortSubscription
-        |> Channel.acceptOne
-        |> Procedure.run ProcedureTagger DataTagger
-
--}
 acceptOne : Channel a -> Procedure e a
 acceptOne =
     always True |> acceptUntil
 
 
-{-| Generate a procedure that processes messages on a channel indefinitely.
-
-For example, suppose `mySubscription` provides a stream of numbers. If you wanted to filter and map
-these messages before passing these to your update function, you could do the following:
-
-    Channel.join mySubscription
-        |> Channel.filter (\_ data -> modBy 2 data == 0)
-        |> Channel.accept
-        |> Procedure.map String.fromInt
-        |> Procedure.run ProcedureTagger StringTagger
-
-Then, as numbers come in through `mySubscription`, a `StringTagger` message will be sent
-that tags the even numbers as a string.
-
--}
 accept : Channel a -> Procedure e a
 accept =
     always False |> acceptUntil
 
 
-{-| Generate a procedure that processes messages on a channel as they are received until the
-predicate is satisfied. When the predicate is satisfied, the last message received on the channel
-will be processed and the channel will be closed.
-
-For example, suppose `mySubscription` provides a stream of numbers. If you wanted to filter and map
-these messages before passing these to your update function, you could do the following:
-
-    Channel.join mySubscription
-        |> Channel.filter (\_ data -> modBy 2 data == 0)
-        |> Channel.acceptUntil (\data -> data == 20)
-        |> Procedure.map String.fromInt
-        |> Procedure.run ProcedureTagger StringTagger
-
-Then, as numbers come in through `mySubscription`, a `StringTagger` message will be sent
-that tags the number as a string. Once the number `20` is received from the subscription, the
-channel will close and process no more messages. The last message sent by this procedure will
-be `StringTagger "20"`.
-
--}
 acceptUntil : (a -> Bool) -> Channel a -> Procedure e a
 acceptUntil shouldUnsubscribe (Channel channel) =
     (\procId msgTagger resultTagger ->

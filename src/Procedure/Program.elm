@@ -1,38 +1,14 @@
-module Procedure.Program exposing (Msg, Model, init, update, subscriptions)
-
-{-| Use these functions to configure your program to run procedures.
-
-@docs Msg, Model, init, update, subscriptions
-
--}
+module Procedure.Program exposing (Model, Msg, init, subscriptions, update)
 
 import Dict exposing (Dict)
 import Procedure.Internal exposing (Msg(..))
 import Task
 
 
-{-| Represents the internal `Msg` values used to track the state of a procedure.
-
-The type variable refers to the `Msg` type used by your application.
-You should provide a message type that wraps these values like so:
-
-    type AppMsg
-        = ProcMsg (Procedure.Program.Msg AppMsg)
-
--}
 type alias Msg =
     Procedure.Internal.Msg
 
 
-{-| Represents the internal state used to track running procedures.
-
-You should store this in your application's model like so:
-
-    type alias AppModel =
-        { procModel : Procedure.Program.Model AppMsg
-        }
-
--}
 type Model
     = Model Registry
 
@@ -43,8 +19,6 @@ type alias Registry =
     }
 
 
-{-| Generate the model used to track procedures.
--}
 init : Model
 init =
     { nextId = 0
@@ -53,18 +27,6 @@ init =
         |> Model
 
 
-{-| Update the state of running procedures.
-
-You should add this to your application's update function like so:
-
-    update : AppMsg -> AppModel -> ( AppModel, Cmd AppMsg )
-    update appMsg appModel =
-        case appMsg of
-            ProcedureTagger procMsg ->
-                Procedure.Program.update procMsg appModel.procModel
-                    |> Tuple.mapFirst (\updated -> { appModel | procModel = updated })
-
--}
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg (Model registry) =
     updateProcedures msg registry
@@ -118,18 +80,6 @@ sendMessage msg =
         |> Task.perform (always msg)
 
 
-{-| Get any subscriptions necessary for running procedures.
-
-Add this to your application's subscriptions function like so:
-
-    appSubscriptions : AppModel -> Sub AppMsg
-    appSubscriptions appModel =
-        Procedure.Program.subscriptions appModel.procModel
-
-Note: You only need to use this function if you are using procedures
-with channels, i.e. if you have subscriptions in your procedures.
-
--}
 subscriptions : Model -> Sub Msg
 subscriptions (Model registry) =
     Dict.values registry.channels
