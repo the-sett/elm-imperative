@@ -53,16 +53,52 @@ import Task exposing (Task)
 -- The imperative structure
 
 
+type alias PRegistry s =
+    { nextId : Int
+    , channels : Dict Int (Sub Msg)
+    , state : s
+    }
+
+
 {-| Proc combines `Result`, `Task` and the state monad together.
 -}
 type Proc s x a
-    = State (s -> ( s, T s x a ))
+    = State (PRegistry s -> ( PRegistry s, T s x a ))
 
 
 type T s x a
     = PTask (Task.Task x (Proc s x a))
     | POk a
     | PErr x
+
+
+
+--| PInitiate (Int -> Cmd (Proc s x a))
+--| PExecute Int (Cmd (Proc s x a))
+--| PSubscribe Int (Int -> Msg) (Int -> Sub (Proc s x a))
+--| PUnsubscribe Int Int (Proc s x a)
+
+
+type Msg
+    = Initiate (Int -> Cmd Msg)
+    | Execute Int (Cmd Msg)
+    | Subscribe Int (Int -> Msg) (Int -> Sub Msg)
+    | Unsubscribe Int Int Msg
+    | Continue
+
+
+type Procedure e a
+    = Procedure (Int -> (Result e a -> Msg) -> Cmd Msg)
+
+
+type Model
+    = Model Registry
+
+
+type alias Registry =
+    { nextId : Int
+    , channels : Dict Int (Sub Msg)
+    }
 
 
 
@@ -80,15 +116,16 @@ type alias Program flags model err res =
 program : flags -> (flags -> model) -> Proc model err res -> Program flags model err res
 program flags initFn io =
     Platform.worker
-        { init = \_ -> eval io (initFn flags)
-        , update = eval
-        , subscriptions = \_ -> Sub.none
-        }
+        --{ init = \_ -> eval io (initFn flags)
+        --, update = eval
+        --, subscriptions = \_ -> Sub.none
+        --}
+        (Debug.todo "")
 
 
-eval : Proc s x a -> s -> ( s, Cmd (Proc s x a) )
-eval (State io) state =
-    case io state of
+eval : Proc s x a -> PRegistry s -> ( PRegistry s, Cmd (Proc s x a) )
+eval (State io) reg =
+    case io reg of
         ( innerS, PTask t ) ->
             ( innerS
             , Task.attempt
@@ -161,7 +198,13 @@ value for the program.
 -}
 advance : (s -> ( s, a )) -> Proc s x a
 advance fn =
-    (\s -> fn s |> Tuple.mapSecond POk)
+    (\reg ->
+        let
+            ( s, a ) =
+                fn reg.state
+        in
+        ( { reg | state = s }, POk a )
+    )
         |> State
 
 
@@ -362,21 +405,21 @@ map6 f p1 p2 p3 p4 p5 p6 =
 -}
 get : Proc s x s
 get =
-    State (\s -> ( s, POk s ))
+    State (\reg -> ( reg, POk reg.state ))
 
 
 {-| An `Proc` that takes the given current state.
 -}
 put : s -> Proc s x ()
 put s =
-    State (\_ -> ( s, POk () ))
+    State (\reg -> ( { reg | state = s }, POk () ))
 
 
 {-| Applies a function to the current state to produce an `Proc` with a new current state.
 -}
 modify : (s -> s) -> Proc s x ()
 modify fn =
-    State (\s -> ( fn s, POk () ))
+    State (\reg -> ( { reg | state = fn reg.state }, POk () ))
 
 
 
@@ -393,22 +436,6 @@ in the list will become the error value of the result.
 sequence : List (Proc s x a) -> Proc s x (List a)
 sequence ios =
     List.foldr (map2 (::)) (pure []) ios
-
-
-
--- Internal
-
-
-type Msg
-    = Initiate (Int -> Cmd Msg)
-    | Execute Int (Cmd Msg)
-    | Subscribe Int (Int -> Msg) (Int -> Sub Msg)
-    | Unsubscribe Int Int Msg
-    | Continue
-
-
-type Procedure e a
-    = Procedure (Int -> (Result e a -> Msg) -> Cmd Msg)
 
 
 
@@ -716,16 +743,6 @@ defaultPredicate _ _ =
 
 
 -- Program
-
-
-type Model
-    = Model Registry
-
-
-type alias Registry =
-    { nextId : Int
-    , channels : Dict Int (Sub Msg)
-    }
 
 
 init : Model
