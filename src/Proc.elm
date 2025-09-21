@@ -46,8 +46,6 @@ state monad. This helps you do stateful programming with IO and error handling.
 -}
 
 import Procedure
-import Procedure.Channel
-import Procedure.Program as Program
 import Task
 
 

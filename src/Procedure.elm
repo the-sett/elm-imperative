@@ -1,29 +1,27 @@
-module Procedure exposing
-    ( Procedure
-    , andThen
-    , break
-    , catch
-    , collect
-    , do
-    , endWith
-    , fetch
-    , fetchResult
-    , fromTask
-    , map
-    , map2
-    , map3
-    , mapError
-    , provide
-    , run
-    , try
-    )
+module Procedure exposing (..)
 
-import Procedure.Internal as Internal exposing (Msg(..))
+import Dict exposing (Dict)
 import Task exposing (Task)
 
 
-type alias Procedure e a =
-    Internal.Procedure e a
+
+-- Internal
+
+
+type Msg
+    = Initiate (Int -> Cmd Msg)
+    | Execute Int (Cmd Msg)
+    | Subscribe Int (Int -> Msg) (Int -> Sub Msg)
+    | Unsubscribe Int Int Msg
+    | Continue
+
+
+type Procedure e a
+    = Procedure (Int -> (Msg -> Msg) -> (Result e a -> Msg) -> Cmd Msg)
+
+
+
+-- Procedure
 
 
 fetch : ((a -> Msg) -> Cmd Msg) -> Procedure e a
@@ -31,7 +29,7 @@ fetch generator =
     (\_ _ tagger ->
         (Ok >> tagger) |> generator
     )
-        |> Internal.Procedure
+        |> Procedure
 
 
 fetchResult : ((Result e a -> Msg) -> Cmd Msg) -> Procedure e a
@@ -39,7 +37,7 @@ fetchResult generator =
     (\_ _ tagger ->
         generator tagger
     )
-        |> Internal.Procedure
+        |> Procedure
 
 
 do : Cmd Msg -> Procedure Never ()
@@ -58,7 +56,7 @@ do command =
                         |> msgTagger
                 )
     )
-        |> Internal.Procedure
+        |> Procedure
 
 
 endWith : Cmd Msg -> Procedure Never Never
@@ -71,7 +69,7 @@ endWith command =
                         |> msgTagger
                 )
     )
-        |> Internal.Procedure
+        |> Procedure
 
 
 provide : a -> Procedure e a
@@ -84,7 +82,7 @@ fromTask task =
     (\_ _ resultTagger ->
         Task.attempt resultTagger task
     )
-        |> Internal.Procedure
+        |> Procedure
 
 
 break : e -> Procedure e a
@@ -145,7 +143,7 @@ addToList procedure collector =
 
 emptyProcedure : Procedure e a
 emptyProcedure =
-    (\_ _ _ -> Cmd.none) |> Internal.Procedure
+    (\_ _ _ -> Cmd.none) |> Procedure
 
 
 map : (a -> b) -> Procedure e a -> Procedure e b
@@ -187,11 +185,11 @@ mapError mapper procedure =
 
 
 next : Procedure e a -> (Result e a -> Procedure f b) -> Procedure f b
-next (Internal.Procedure procedure) resultMapper =
+next (Procedure procedure) resultMapper =
     (\procId msgTagger tagger ->
         (\aResult ->
             let
-                (Internal.Procedure nextProcedure) =
+                (Procedure nextProcedure) =
                     resultMapper aResult
             in
             nextProcedure procId msgTagger tagger
@@ -199,11 +197,11 @@ next (Internal.Procedure procedure) resultMapper =
         )
             |> procedure procId msgTagger
     )
-        |> Internal.Procedure
+        |> Procedure
 
 
 try : (Msg -> Msg) -> (Result e a -> Msg) -> Procedure e a -> Cmd Msg
-try msgTagger tagger (Internal.Procedure procedure) =
+try msgTagger tagger (Procedure procedure) =
     Task.succeed (\procId -> procedure procId msgTagger tagger)
         |> Task.perform (Initiate >> msgTagger)
 
@@ -219,3 +217,188 @@ run msgTagger tagger =
                 Err e ->
                     never e
         )
+
+
+
+-- Channel
+
+
+type Channel a
+    = Channel
+        { request : String -> Cmd Msg
+        , subscription : (a -> Msg) -> Sub Msg
+        , shouldAccept : String -> a -> Bool
+        }
+
+
+type ChannelRequest
+    = ChannelRequest (String -> Cmd Msg)
+
+
+open : (String -> Cmd Msg) -> ChannelRequest
+open =
+    ChannelRequest
+
+
+connect : ((a -> Msg) -> Sub Msg) -> ChannelRequest -> Channel a
+connect generator (ChannelRequest requestGenerator) =
+    Channel
+        { request = requestGenerator
+        , subscription = generator
+        , shouldAccept = defaultPredicate
+        }
+
+
+join : ((a -> Msg) -> Sub Msg) -> Channel a
+join generator =
+    Channel
+        { request = defaultRequest
+        , subscription = generator
+        , shouldAccept = defaultPredicate
+        }
+
+
+filter : (String -> a -> Bool) -> Channel a -> Channel a
+filter predicate (Channel channel) =
+    Channel
+        { channel | shouldAccept = predicate }
+
+
+acceptOne : Channel a -> Procedure e a
+acceptOne =
+    always True |> acceptUntil
+
+
+accept : Channel a -> Procedure e a
+accept =
+    always False |> acceptUntil
+
+
+acceptUntil : (a -> Bool) -> Channel a -> Procedure e a
+acceptUntil shouldUnsubscribe (Channel channel) =
+    (\procId msgTagger resultTagger ->
+        let
+            requestCommandMsg channelId =
+                channel.request (channelKey channelId)
+                    |> (Execute procId >> msgTagger)
+
+            subGenerator channelId =
+                (\aData ->
+                    if channel.shouldAccept (channelKey channelId) aData then
+                        generateMsg channelId aData
+
+                    else
+                        msgTagger Continue
+                )
+                    |> channel.subscription
+
+            generateMsg channelId aData =
+                if shouldUnsubscribe aData then
+                    Ok aData
+                        |> resultTagger
+                        |> (Unsubscribe procId channelId >> msgTagger)
+
+                else
+                    Ok aData
+                        |> resultTagger
+        in
+        Task.succeed subGenerator
+            |> Task.perform (Subscribe procId requestCommandMsg >> msgTagger)
+    )
+        |> Procedure
+
+
+channelKey : Int -> String
+channelKey channelId =
+    "Channel-" ++ String.fromInt channelId
+
+
+defaultRequest : String -> Cmd Msg
+defaultRequest _ =
+    Cmd.none
+
+
+defaultPredicate : String -> a -> Bool
+defaultPredicate _ _ =
+    True
+
+
+
+-- Program
+
+
+type Model
+    = Model Registry
+
+
+type alias Registry =
+    { nextId : Int
+    , channels : Dict Int (Sub Msg)
+    }
+
+
+init : Model
+init =
+    { nextId = 0
+    , channels = Dict.empty
+    }
+        |> Model
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg (Model registry) =
+    updateProcedures msg registry
+        |> Tuple.mapFirst Model
+
+
+updateProcedures : Msg -> Registry -> ( Registry, Cmd Msg )
+updateProcedures msg registry =
+    case msg of
+        Initiate generator ->
+            ( { registry | nextId = registry.nextId + 1 }
+            , generator registry.nextId
+            )
+
+        Execute _ cmd ->
+            ( registry
+            , cmd
+            )
+
+        Subscribe _ messageGenerator subGenerator ->
+            ( addChannel subGenerator registry
+            , messageGenerator registry.nextId
+                |> sendMessage
+            )
+
+        Unsubscribe _ channelId nextMessage ->
+            ( deleteChannel channelId registry
+            , sendMessage nextMessage
+            )
+
+        Continue ->
+            ( registry, Cmd.none )
+
+
+addChannel : (Int -> Sub Msg) -> Registry -> Registry
+addChannel subGenerator registry =
+    { registry
+        | nextId = registry.nextId + 1
+        , channels = Dict.insert registry.nextId (subGenerator registry.nextId) registry.channels
+    }
+
+
+deleteChannel : Int -> Registry -> Registry
+deleteChannel channelId procModel =
+    { procModel | channels = Dict.remove channelId procModel.channels }
+
+
+sendMessage : Msg -> Cmd Msg
+sendMessage msg =
+    Task.succeed ()
+        |> Task.perform (always msg)
+
+
+subscriptions : Model -> Sub Msg
+subscriptions (Model registry) =
+    Dict.values registry.channels
+        |> Sub.batch
