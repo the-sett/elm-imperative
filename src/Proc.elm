@@ -122,6 +122,7 @@ program flags initFn io =
         }
 
 
+initp : s -> PRegistry s
 initp s =
     { nextId = 0
     , channels = Dict.empty
