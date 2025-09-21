@@ -12,8 +12,16 @@ when inside the directory containing this file.
 -}
 
 import Review.Rule exposing (Rule)
+import ReviewPipelineStyles
+import ReviewPipelineStyles.Premade as Premade
 
 
 config : List Rule
 config =
-    []
+    [ ReviewPipelineStyles.rule <|
+        List.concat
+            [ Premade.noMultilineLeftPizza
+            , Premade.noMultilineLeftComposition
+            , Premade.noSemanticallyInfixFunctionsInLeftPipelines
+            ]
+    ]

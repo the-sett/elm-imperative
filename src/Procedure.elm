@@ -332,8 +332,7 @@ addToList procedure collector =
 
 emptyProcedure : Procedure e a
 emptyProcedure =
-    Internal.Procedure <|
-        \_ _ _ -> Cmd.none
+    Internal.Procedure <| \_ _ _ -> Cmd.none
 
 
 {-| Generate a procedure that transforms the value of the previous procedure.
@@ -429,8 +428,7 @@ next (Internal.Procedure procedure) resultMapper =
                             resultMapper aResult
                     in
                     nextProcedure procId msgTagger tagger
-                        |> msgTagger
-                        << Execute procId
+                        |> (msgTagger << Execute procId)
 
 
 {-| Execute a procedure that may fail.
