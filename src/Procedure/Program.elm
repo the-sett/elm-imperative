@@ -7,7 +7,7 @@ module Procedure.Program exposing (Msg, Model, init, update, subscriptions)
 -}
 
 import Dict exposing (Dict)
-import Procedure.Internal exposing (ChannelId, Msg(..))
+import Procedure.Internal exposing (Msg(..))
 import Task
 
 
@@ -38,8 +38,8 @@ type Model
 
 
 type alias Registry =
-    { nextId : ChannelId
-    , channels : Dict ChannelId (Sub Msg)
+    { nextId : Int
+    , channels : Dict Int (Sub Msg)
     }
 
 
@@ -99,7 +99,7 @@ updateProcedures msg registry =
             ( registry, Cmd.none )
 
 
-addChannel : (ChannelId -> Sub Msg) -> Registry -> Registry
+addChannel : (Int -> Sub Msg) -> Registry -> Registry
 addChannel subGenerator registry =
     { registry
         | nextId = registry.nextId + 1
@@ -107,7 +107,7 @@ addChannel subGenerator registry =
     }
 
 
-deleteChannel : ChannelId -> Registry -> Registry
+deleteChannel : Int -> Registry -> Registry
 deleteChannel channelId procModel =
     { procModel | channels = Dict.remove channelId procModel.channels }
 

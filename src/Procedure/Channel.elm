@@ -1,7 +1,7 @@
 module Procedure.Channel exposing
     ( Channel
     , join
-    , ChannelKey, ChannelRequest, open, connect
+    , ChannelRequest, open, connect
     , filter
     , accept, acceptOne, acceptUntil
     )
@@ -21,7 +21,7 @@ You can define a channel that simply listens for messages on a subscription.
 
 You can also define a channel by providing a command and a subscription to receive messages in response.
 
-@docs ChannelKey, ChannelRequest, open, connect
+@docs String, ChannelRequest, open, connect
 
 
 # Work with a Channel
@@ -35,34 +35,24 @@ You can also define a channel by providing a command and a subscription to recei
 
 -}
 
-import Procedure.Internal exposing (ChannelId, Msg(..), Procedure(..))
+import Procedure.Internal exposing (Msg(..), Procedure(..))
 import Task
-
-
-{-| Represents the unique key assigned to each procedure.
-
-This is most useful when opening a channel by sending a command, where you might pass the key
-through a port and then use it to filter incoming messages to a subscription.
-
--}
-type alias ChannelKey =
-    String
 
 
 {-| Represents a method for receiving messages from the outside world.
 -}
 type Channel a
     = Channel
-        { request : ChannelKey -> Cmd Msg
+        { request : String -> Cmd Msg
         , subscription : (a -> Msg) -> Sub Msg
-        , shouldAccept : ChannelKey -> a -> Bool
+        , shouldAccept : String -> a -> Bool
         }
 
 
 {-| Represents a request to open a channel.
 -}
 type ChannelRequest
-    = ChannelRequest (ChannelKey -> Cmd Msg)
+    = ChannelRequest (String -> Cmd Msg)
 
 
 {-| Open a channel by sending a command. Use this in conjunction with `connect` to define a channel.
@@ -75,12 +65,12 @@ You could accomplish that like so:
         |> Channel.acceptOne
         |> Procedure.run ProcedureTagger DataTagger
 
-Use the provided `ChannelKey` if you need something to connect subscription messages with the command that opens the channel.
+Use the provided `String` if you need something to connect subscription messages with the command that opens the channel.
 On the JS side, your port command could take the channel key and pass it back when supplying a subscription message.
 In your channel setup, you would filter messages by this key. See `filter` for an example.
 
 -}
-open : (ChannelKey -> Cmd Msg) -> ChannelRequest
+open : (String -> Cmd Msg) -> ChannelRequest
 open =
     ChannelRequest
 
@@ -147,7 +137,7 @@ with channels that utilize this subscription are running simultaneously.
 Note: Calling filter multiple times on a channel simply replaces any existing filter on that channel.
 
 -}
-filter : (ChannelKey -> a -> Bool) -> Channel a -> Channel a
+filter : (String -> a -> Bool) -> Channel a -> Channel a
 filter predicate (Channel channel) =
     Channel
         { channel | shouldAccept = predicate }
@@ -243,16 +233,16 @@ acceptUntil shouldUnsubscribe (Channel channel) =
         |> Procedure
 
 
-channelKey : ChannelId -> ChannelKey
+channelKey : Int -> String
 channelKey channelId =
     "Channel-" ++ String.fromInt channelId
 
 
-defaultRequest : ChannelKey -> Cmd Msg
+defaultRequest : String -> Cmd Msg
 defaultRequest _ =
     Cmd.none
 
 
-defaultPredicate : ChannelKey -> a -> Bool
+defaultPredicate : String -> a -> Bool
 defaultPredicate _ _ =
     True
