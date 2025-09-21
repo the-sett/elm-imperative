@@ -17,7 +17,7 @@ type Msg
 
 
 type Procedure e a
-    = Procedure (Int -> (Msg -> Msg) -> (Result e a -> Msg) -> Cmd Msg)
+    = Procedure (Int -> (Result e a -> Msg) -> Cmd Msg)
 
 
 
@@ -26,7 +26,7 @@ type Procedure e a
 
 fetch : ((a -> Msg) -> Cmd Msg) -> Procedure e a
 fetch generator =
-    (\_ _ tagger ->
+    (\_ tagger ->
         (Ok >> tagger) |> generator
     )
         |> Procedure
@@ -34,7 +34,7 @@ fetch generator =
 
 fetchResult : ((Result e a -> Msg) -> Cmd Msg) -> Procedure e a
 fetchResult generator =
-    (\_ _ tagger ->
+    (\_ tagger ->
         generator tagger
     )
         |> Procedure
@@ -42,7 +42,7 @@ fetchResult generator =
 
 do : Cmd Msg -> Procedure Never ()
 do command =
-    (\procId msgTagger resultTagger ->
+    (\procId resultTagger ->
         Task.succeed ()
             |> Task.perform
                 (\_ ->
@@ -53,7 +53,6 @@ do command =
                     in
                     Cmd.batch [ command, nextCommand ]
                         |> Execute procId
-                        |> msgTagger
                 )
     )
         |> Procedure
@@ -61,12 +60,11 @@ do command =
 
 endWith : Cmd Msg -> Procedure Never Never
 endWith command =
-    (\procId msgTagger _ ->
+    (\procId _ ->
         Task.succeed ()
             |> Task.perform
                 (\_ ->
                     Execute procId command
-                        |> msgTagger
                 )
     )
         |> Procedure
@@ -79,7 +77,7 @@ provide =
 
 fromTask : Task e a -> Procedure e a
 fromTask task =
-    (\_ _ resultTagger ->
+    (\_ resultTagger ->
         Task.attempt resultTagger task
     )
         |> Procedure
@@ -143,7 +141,7 @@ addToList procedure collector =
 
 emptyProcedure : Procedure e a
 emptyProcedure =
-    (\_ _ _ -> Cmd.none) |> Procedure
+    (\_ _ -> Cmd.none) |> Procedure
 
 
 map : (a -> b) -> Procedure e a -> Procedure e b
@@ -186,29 +184,29 @@ mapError mapper procedure =
 
 next : Procedure e a -> (Result e a -> Procedure f b) -> Procedure f b
 next (Procedure procedure) resultMapper =
-    (\procId msgTagger tagger ->
+    (\procId tagger ->
         (\aResult ->
             let
                 (Procedure nextProcedure) =
                     resultMapper aResult
             in
-            nextProcedure procId msgTagger tagger
-                |> (Execute procId >> msgTagger)
+            nextProcedure procId tagger
+                |> Execute procId
         )
-            |> procedure procId msgTagger
+            |> procedure procId
     )
         |> Procedure
 
 
-try : (Msg -> Msg) -> (Result e a -> Msg) -> Procedure e a -> Cmd Msg
-try msgTagger tagger (Procedure procedure) =
-    Task.succeed (\procId -> procedure procId msgTagger tagger)
-        |> Task.perform (Initiate >> msgTagger)
+try : (Result e a -> Msg) -> Procedure e a -> Cmd Msg
+try tagger (Procedure procedure) =
+    Task.succeed (\procId -> procedure procId tagger)
+        |> Task.perform Initiate
 
 
-run : (Msg -> Msg) -> (a -> Msg) -> Procedure Never a -> Cmd Msg
-run msgTagger tagger =
-    try msgTagger
+run : (a -> Msg) -> Procedure Never a -> Cmd Msg
+run tagger =
+    try
         (\result ->
             case result of
                 Ok data ->
@@ -276,11 +274,11 @@ accept =
 
 acceptUntil : (a -> Bool) -> Channel a -> Procedure e a
 acceptUntil shouldUnsubscribe (Channel channel) =
-    (\procId msgTagger resultTagger ->
+    (\procId resultTagger ->
         let
             requestCommandMsg channelId =
                 channel.request (channelKey channelId)
-                    |> (Execute procId >> msgTagger)
+                    |> Execute procId
 
             subGenerator channelId =
                 (\aData ->
@@ -288,7 +286,7 @@ acceptUntil shouldUnsubscribe (Channel channel) =
                         generateMsg channelId aData
 
                     else
-                        msgTagger Continue
+                        Continue
                 )
                     |> channel.subscription
 
@@ -296,14 +294,14 @@ acceptUntil shouldUnsubscribe (Channel channel) =
                 if shouldUnsubscribe aData then
                     Ok aData
                         |> resultTagger
-                        |> (Unsubscribe procId channelId >> msgTagger)
+                        |> Unsubscribe procId channelId
 
                 else
                     Ok aData
                         |> resultTagger
         in
         Task.succeed subGenerator
-            |> Task.perform (Subscribe procId requestCommandMsg >> msgTagger)
+            |> Task.perform (Subscribe procId requestCommandMsg)
     )
         |> Procedure
 
