@@ -70,10 +70,10 @@ type T s x a
     = PTask (Task.Task x (Proc s x a))
     | POk a
     | PErr x
+    | PInitiate (Int -> Cmd (Proc s x a))
 
 
 
---| PInitiate (Int -> Cmd (Proc s x a))
 --| PExecute Int (Cmd (Proc s x a))
 --| PSubscribe Int (Int -> Msg) (Int -> Sub (Proc s x a))
 --| PUnsubscribe Int Int (Proc s x a)
@@ -132,8 +132,8 @@ initp s =
 eval : Proc s x a -> PRegistry s -> ( PRegistry s, Cmd (Proc s x a) )
 eval (State io) reg =
     case io reg of
-        ( innerS, PTask t ) ->
-            ( innerS
+        ( nextReg, PTask t ) ->
+            ( nextReg
             , Task.attempt
                 (\r ->
                     case r of
@@ -146,18 +146,38 @@ eval (State io) reg =
                 t
             )
 
-        ( innerS, POk x ) ->
-            ( innerS
+        ( nextReg, POk x ) ->
+            ( nextReg
             , Cmd.none
             )
 
-        ( innerS, PErr e ) ->
-            ( innerS
+        ( nextReg, PErr e ) ->
+            ( nextReg
             , Cmd.none
+            )
+
+        ( nextReg, PInitiate generator ) ->
+            ( { nextReg | nextId = nextReg.nextId + 1 }
+            , generator nextReg.nextId
             )
 
 
 
+--PExecute _ cmd ->
+--    ( registry
+--    , cmd
+--    )
+--
+--PSubscribe _ messageGenerator subGenerator ->
+--    ( addChannel subGenerator registry
+--    , messageGenerator registry.nextId
+--        |> sendMessage
+--    )
+--
+--PUnsubscribe _ channelId nextMessage ->
+--    ( deleteChannel channelId registry
+--    , sendMessage nextMessage
+--    )
 -- Constructors
 
 
@@ -228,22 +248,27 @@ andThen : (a -> Proc s x b) -> Proc s x a -> Proc s x b
 andThen mf (State io) =
     (\s ->
         case io s of
-            ( innerS, PTask t ) ->
-                ( innerS
+            ( nextReg, PTask t ) ->
+                ( nextReg
                 , Task.andThen (\inner -> Task.succeed (andThen mf inner)) t
                     |> PTask
                 )
 
-            ( innerS, POk x ) ->
+            ( nextReg, POk x ) ->
                 let
                     (State stateFn) =
                         mf x
                 in
-                stateFn innerS
+                stateFn nextReg
 
-            ( innerS, PErr e ) ->
-                ( innerS
+            ( nextReg, PErr e ) ->
+                ( nextReg
                 , PErr e
+                )
+
+            ( nextReg, PInitiate generator ) ->
+                ( nextReg
+                , (generator >> Cmd.map (andThen mf)) |> PInitiate
                 )
     )
         |> State
@@ -269,25 +294,63 @@ onError : (x -> Proc s y a) -> Proc s x a -> Proc s y a
 onError ef (State io) =
     (\s ->
         case io s of
-            ( innerS, PTask t ) ->
-                ( innerS
+            ( nextReg, PTask t ) ->
+                ( nextReg
                 , Task.onError
                     (\e -> ef e |> Task.succeed)
                     (t |> Task.map (onError ef))
                     |> PTask
                 )
 
-            ( innerS, POk x ) ->
-                ( innerS, POk x )
+            ( nextReg, POk x ) ->
+                ( nextReg, POk x )
 
-            ( innerS, PErr e ) ->
+            ( nextReg, PErr e ) ->
                 let
                     (State stateFn) =
                         ef e
                 in
-                stateFn innerS
+                stateFn nextReg
+
+            ( nextReg, PInitiate generator ) ->
+                let
+                    hole : Proc s x a -> Proc s y a
+                    hole p =
+                        Debug.todo ""
+                in
+                ( nextReg
+                , generator >> Cmd.map hole |> PInitiate
+                )
     )
         |> State
+
+
+mapErrorp : (x -> y) -> Proc s x a -> Proc s y a
+mapErrorp mf (State io) =
+    --(\s ->
+    --    case io s of
+    --        ( nextReg, PTask t ) ->
+    --            ( nextReg
+    --            , Task.andThen (\inner -> Task.succeed (map mf inner)) t |> PTask
+    --            )
+    --
+    --        ( nextReg, POk x ) ->
+    --            ( nextReg
+    --            , mf x |> POk
+    --            )
+    --
+    --        ( nextReg, PErr e ) ->
+    --            ( nextReg
+    --            , PErr e
+    --            )
+    --
+    --        ( nextReg, PInitiate generator ) ->
+    --            ( nextReg
+    --            , (generator >> Cmd.map (map mf)) |> PInitiate
+    --            )
+    --)
+    --    |> State
+    Debug.todo ""
 
 
 {-| Applies a function the current value of an `Proc`, provided it is not on the error track.
@@ -296,19 +359,24 @@ map : (a -> b) -> Proc s x a -> Proc s x b
 map mf (State io) =
     (\s ->
         case io s of
-            ( innerS, PTask t ) ->
-                ( innerS
+            ( nextReg, PTask t ) ->
+                ( nextReg
                 , Task.andThen (\inner -> Task.succeed (map mf inner)) t |> PTask
                 )
 
-            ( innerS, POk x ) ->
-                ( innerS
+            ( nextReg, POk x ) ->
+                ( nextReg
                 , mf x |> POk
                 )
 
-            ( innerS, PErr e ) ->
-                ( innerS
+            ( nextReg, PErr e ) ->
+                ( nextReg
                 , PErr e
+                )
+
+            ( nextReg, PInitiate generator ) ->
+                ( nextReg
+                , (generator >> Cmd.map (map mf)) |> PInitiate
                 )
     )
         |> State
