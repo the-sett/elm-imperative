@@ -211,34 +211,36 @@ be `StringTagger "20"`.
 -}
 acceptUntil : (a -> Bool) -> Channel a -> Procedure e a
 acceptUntil shouldUnsubscribe (Channel channel) =
-    Procedure <|
-        \procId msgTagger resultTagger ->
-            let
-                requestCommandMsg channelId =
-                    channel.request (channelKey channelId)
-                        |> (msgTagger << Execute procId)
+    (\procId msgTagger resultTagger ->
+        let
+            requestCommandMsg channelId =
+                channel.request (channelKey channelId)
+                    |> (Execute procId >> msgTagger)
 
-                subGenerator channelId =
-                    channel.subscription <|
-                        \aData ->
-                            if channel.shouldAccept (channelKey channelId) aData then
-                                generateMsg channelId aData
-
-                            else
-                                msgTagger Continue
-
-                generateMsg channelId aData =
-                    if shouldUnsubscribe aData then
-                        Ok aData
-                            |> resultTagger
-                            |> (msgTagger << Unsubscribe procId channelId)
+            subGenerator channelId =
+                (\aData ->
+                    if channel.shouldAccept (channelKey channelId) aData then
+                        generateMsg channelId aData
 
                     else
-                        Ok aData
-                            |> resultTagger
-            in
-            Task.succeed subGenerator
-                |> Task.perform (Subscribe procId requestCommandMsg >> msgTagger)
+                        msgTagger Continue
+                )
+                    |> channel.subscription
+
+            generateMsg channelId aData =
+                if shouldUnsubscribe aData then
+                    Ok aData
+                        |> resultTagger
+                        |> (Unsubscribe procId channelId >> msgTagger)
+
+                else
+                    Ok aData
+                        |> resultTagger
+        in
+        Task.succeed subGenerator
+            |> Task.perform (Subscribe procId requestCommandMsg >> msgTagger)
+    )
+        |> Procedure
 
 
 channelKey : ChannelId -> ChannelKey

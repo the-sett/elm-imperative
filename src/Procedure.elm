@@ -61,9 +61,10 @@ that do not produce a value, use `do`.
 -}
 fetch : ((a -> Msg) -> Cmd Msg) -> Procedure e a
 fetch generator =
-    Internal.Procedure <|
-        \_ _ tagger ->
-            (tagger << Ok) |> generator
+    (\_ _ tagger ->
+        (Ok >> tagger) |> generator
+    )
+        |> Internal.Procedure
 
 
 {-| Generate a procedure that gets the result produced by executing some `Cmd`.
@@ -93,9 +94,10 @@ If the Http request fails, then the result will be: `No response`.
 -}
 fetchResult : ((Result e a -> Msg) -> Cmd Msg) -> Procedure e a
 fetchResult generator =
-    Internal.Procedure <|
-        \_ _ tagger ->
-            generator tagger
+    (\_ _ tagger ->
+        generator tagger
+    )
+        |> Internal.Procedure
 
 
 {-| Generate a procedure that executes a `Cmd` that does not produce any value directly.
@@ -112,20 +114,21 @@ a `Channel`.
 -}
 do : Cmd Msg -> Procedure Never ()
 do command =
-    Internal.Procedure <|
-        \procId msgTagger resultTagger ->
-            Task.succeed ()
-                |> Task.perform
-                    (\_ ->
-                        let
-                            nextCommand =
-                                Task.succeed ()
-                                    |> Task.perform (resultTagger << Ok)
-                        in
-                        Cmd.batch [ command, nextCommand ]
-                            |> Execute procId
-                            |> msgTagger
-                    )
+    (\procId msgTagger resultTagger ->
+        Task.succeed ()
+            |> Task.perform
+                (\_ ->
+                    let
+                        nextCommand =
+                            Task.succeed ()
+                                |> Task.perform (Ok >> resultTagger)
+                    in
+                    Cmd.batch [ command, nextCommand ]
+                        |> Execute procId
+                        |> msgTagger
+                )
+    )
+        |> Internal.Procedure
 
 
 {-| Generate a procedure that runs a command and states that no further value will be provided,
@@ -148,14 +151,15 @@ case), and never produces a message for the update function.
 -}
 endWith : Cmd Msg -> Procedure Never Never
 endWith command =
-    Internal.Procedure <|
-        \procId msgTagger _ ->
-            Task.succeed ()
-                |> Task.perform
-                    (\_ ->
-                        Execute procId command
-                            |> msgTagger
-                    )
+    (\procId msgTagger _ ->
+        Task.succeed ()
+            |> Task.perform
+                (\_ ->
+                    Execute procId command
+                        |> msgTagger
+                )
+    )
+        |> Internal.Procedure
 
 
 {-| Generate a procedure that simply provides a value.
@@ -190,9 +194,10 @@ if `Procedure.break` had been used.
 -}
 fromTask : Task e a -> Procedure e a
 fromTask task =
-    Internal.Procedure <|
-        \_ _ resultTagger ->
-            Task.attempt resultTagger task
+    (\_ _ resultTagger ->
+        Task.attempt resultTagger task
+    )
+        |> Internal.Procedure
 
 
 {-| Generate a procedure that breaks out of the current procedure.
@@ -260,14 +265,15 @@ be `StringTagger "Some default message!"`.
 -}
 catch : (e -> Procedure f a) -> Procedure e a -> Procedure f a
 catch generator procedure =
-    next procedure <|
-        \aResult ->
-            case aResult of
-                Ok aData ->
-                    provide aData
+    (\aResult ->
+        case aResult of
+            Ok aData ->
+                provide aData
 
-                Err eData ->
-                    generator eData
+            Err eData ->
+                generator eData
+    )
+        |> next procedure
 
 
 {-| Generate a new procedure based on the result of the previous procedure.
@@ -284,14 +290,15 @@ Then the result would be `StringTagger "An awesome value!!!"`.
 -}
 andThen : (a -> Procedure e b) -> Procedure e a -> Procedure e b
 andThen generator procedure =
-    next procedure <|
-        \aResult ->
-            case aResult of
-                Ok aData ->
-                    generator aData
+    (\aResult ->
+        case aResult of
+            Ok aData ->
+                generator aData
 
-                Err eData ->
-                    break eData
+            Err eData ->
+                break eData
+    )
+        |> next procedure
 
 
 {-| Generate a procedure that collects the results of a list of procedures.
@@ -318,16 +325,17 @@ collect procedures =
 
 addToList : Procedure e a -> List a -> Procedure e (List a)
 addToList procedure collector =
-    next procedure <|
-        \aResult ->
-            case aResult of
-                Ok aData ->
-                    [ aData ]
-                        |> List.append collector
-                        |> provide
+    (\aResult ->
+        case aResult of
+            Ok aData ->
+                [ aData ]
+                    |> List.append collector
+                    |> provide
 
-                Err eData ->
-                    break eData
+            Err eData ->
+                break eData
+    )
+        |> next procedure
 
 
 emptyProcedure : Procedure e a
@@ -350,7 +358,7 @@ Then the result would be `StringTagger "One, Two, Three"`.
 -}
 map : (a -> b) -> Procedure e a -> Procedure e b
 map mapper =
-    andThen (provide << mapper)
+    andThen (mapper >> provide)
 
 
 {-| Generate a procedure that provides a new value based on the values of two other procedures.
@@ -406,29 +414,32 @@ Note: Error values can be set explicitly by using `break`.
 -}
 mapError : (e -> f) -> Procedure e a -> Procedure f a
 mapError mapper procedure =
-    next procedure <|
-        \aResult ->
-            case aResult of
-                Ok aData ->
-                    provide aData
+    (\aResult ->
+        case aResult of
+            Ok aData ->
+                provide aData
 
-                Err eData ->
-                    mapper eData
-                        |> break
+            Err eData ->
+                mapper eData
+                    |> break
+    )
+        |> next procedure
 
 
 next : Procedure e a -> (Result e a -> Procedure f b) -> Procedure f b
 next (Internal.Procedure procedure) resultMapper =
-    Internal.Procedure <|
-        \procId msgTagger tagger ->
-            procedure procId msgTagger <|
-                \aResult ->
-                    let
-                        (Internal.Procedure nextProcedure) =
-                            resultMapper aResult
-                    in
-                    nextProcedure procId msgTagger tagger
-                        |> (msgTagger << Execute procId)
+    (\procId msgTagger tagger ->
+        (\aResult ->
+            let
+                (Internal.Procedure nextProcedure) =
+                    resultMapper aResult
+            in
+            nextProcedure procId msgTagger tagger
+                |> (Execute procId >> msgTagger)
+        )
+            |> procedure procId msgTagger
+    )
+        |> Internal.Procedure
 
 
 {-| Execute a procedure that may fail.
@@ -440,7 +451,7 @@ The second argument tags the result of the Procedure as a `Msg` in your applicat
 try : (Msg -> Msg) -> (Result e a -> Msg) -> Procedure e a -> Cmd Msg
 try msgTagger tagger (Internal.Procedure procedure) =
     Task.succeed (\procId -> procedure procId msgTagger tagger)
-        |> Task.perform (msgTagger << Initiate)
+        |> Task.perform (Initiate >> msgTagger)
 
 
 {-| Execute a procedure that cannot fail.
