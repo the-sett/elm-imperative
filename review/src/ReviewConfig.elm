@@ -27,9 +27,9 @@ config =
             , Premade.noSemanticallyInfixFunctionsInLeftPipelines
             , [ Pipeline.forbid Pipeline.leftPizzaPipelines
                 |> Pipeline.andTryToFixThemBy Fixes.convertingToRightPizza
-                |> Pipeline.andCallThem "<| pipeline with several steps" ]
+                |> Pipeline.andCallThem "<| pipeline" ]
             , [ Pipeline.forbid Pipeline.leftCompositionPipelines
                 |> Pipeline.andTryToFixThemBy Fixes.convertingToRightComposition
-                |> Pipeline.andCallThem "<| pipeline with several steps" ]
+                |> Pipeline.andCallThem "<< pipeline" ]
             ]
     ]
