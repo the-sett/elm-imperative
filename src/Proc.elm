@@ -72,7 +72,7 @@ type T s x a
     | POk a
     | PErr x
     | PInitiate (Int -> Cmd (Proc s x a))
-      --| PExecute Int (Cmd (Proc s x a))
+    | PExecute Int (Cmd (Proc s x a))
     | PSubscribe Int (Int -> Proc s x a) (Int -> Sub (Proc s x a))
     | PUnsubscribe Int Int (Proc s x a)
 
@@ -172,23 +172,13 @@ eval (State io) reg =
             , sendMessage nextMessage
             )
 
+        ( nextReg, PExecute _ cmd ) ->
+            ( nextReg
+            , cmd
+            )
 
 
---PExecute _ cmd ->
---    ( registry
---    , cmd
---    )
---
---PSubscribe _ messageGenerator subGenerator ->
---    ( addChannel subGenerator registry
---    , messageGenerator registry.nextId
---        |> sendMessage
---    )
---
---PUnsubscribe _ channelId nextMessage ->
---    ( deleteChannel channelId registry
---    , sendMessage nextMessage
---    )
+
 -- Constructors
 
 
@@ -287,6 +277,9 @@ andThen mf (State io) =
 
             ( nextReg, PUnsubscribe _ _ _ ) ->
                 Debug.todo ""
+
+            ( nextReg, PExecute _ _ ) ->
+                Debug.todo ""
     )
         |> State
 
@@ -339,6 +332,9 @@ onError ef (State io) =
 
             ( nextReg, PUnsubscribe _ _ _ ) ->
                 Debug.todo ""
+
+            ( nextReg, PExecute _ _ ) ->
+                Debug.todo ""
     )
         |> State
 
@@ -373,6 +369,9 @@ map mf (State io) =
                 Debug.todo ""
 
             ( nextReg, PUnsubscribe _ _ _ ) ->
+                Debug.todo ""
+
+            ( nextReg, PExecute _ _ ) ->
                 Debug.todo ""
     )
         |> State
