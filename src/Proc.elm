@@ -53,9 +53,10 @@ import Task exposing (Task)
 -- The imperative structure
 
 
-type alias PRegistry s x a =
+type alias PRegistry s =
     { nextId : Int
-    , channels : Dict Int (Sub (Proc s x a))
+
+    --, channels : Dict Int (Sub (Proc s x a))
     , state : s
     }
 
@@ -63,7 +64,7 @@ type alias PRegistry s x a =
 {-| Proc combines `Result`, `Task` and the state monad together.
 -}
 type Proc s x a
-    = State (PRegistry s x a -> ( PRegistry s x a, T s x a ))
+    = State (PRegistry s -> ( PRegistry s, T s x a ))
 
 
 type T s x a
@@ -72,11 +73,8 @@ type T s x a
     | PErr x
     | PInitiate (Int -> Cmd (Proc s x a))
       --| PExecute Int (Cmd (Proc s x a))
-    | PSubscribe Int (Int -> Msg) (Int -> Sub (Proc s x a))
-
-
-
---| PUnsubscribe Int Int (Proc s x a)
+    | PSubscribe Int (Int -> Proc s x a) (Int -> Sub (Proc s x a))
+    | PUnsubscribe Int Int (Proc s x a)
 
 
 type Msg
@@ -108,7 +106,7 @@ type alias Registry =
 {-| Imperative Elm programs.
 -}
 type alias Program flags model err res =
-    Platform.Program flags (PRegistry model err res) (Proc model err res)
+    Platform.Program flags (PRegistry model) (Proc model err res)
 
 
 {-| Builds an imperative program from flags, an initial model and an imperative program structure.
@@ -122,15 +120,16 @@ program flags initFn io =
         }
 
 
-initp : s -> PRegistry s x a
+initp : s -> PRegistry s
 initp s =
     { nextId = 0
-    , channels = Dict.empty
+
+    --, channels = Dict.empty
     , state = s
     }
 
 
-eval : Proc s x a -> PRegistry s x a -> ( PRegistry s x a, Cmd (Proc s x a) )
+eval : Proc s x a -> PRegistry s -> ( PRegistry s, Cmd (Proc s x a) )
 eval (State io) reg =
     case io reg of
         ( nextReg, PTask t ) ->
@@ -166,6 +165,11 @@ eval (State io) reg =
             ( addChannelP subGenerator nextReg
             , messageGenerator nextReg.nextId
                 |> sendMessage
+            )
+
+        ( nextReg, PUnsubscribe _ channelId nextMessage ) ->
+            ( deleteChannelP channelId nextReg
+            , sendMessage nextMessage
             )
 
 
@@ -280,6 +284,9 @@ andThen mf (State io) =
 
             ( nextReg, PSubscribe _ _ _ ) ->
                 Debug.todo ""
+
+            ( nextReg, PUnsubscribe _ _ _ ) ->
+                Debug.todo ""
     )
         |> State
 
@@ -329,6 +336,9 @@ onError ef (State io) =
 
             ( nextReg, PSubscribe _ _ _ ) ->
                 Debug.todo ""
+
+            ( nextReg, PUnsubscribe _ _ _ ) ->
+                Debug.todo ""
     )
         |> State
 
@@ -360,6 +370,9 @@ map mf (State io) =
                 )
 
             ( nextReg, PSubscribe _ _ _ ) ->
+                Debug.todo ""
+
+            ( nextReg, PUnsubscribe _ _ _ ) ->
                 Debug.todo ""
     )
         |> State
@@ -852,17 +865,24 @@ addChannel subGenerator registry =
     }
 
 
-addChannelP : (Int -> Sub (Proc s x a)) -> PRegistry s x a -> PRegistry s x a
+addChannelP : (Int -> Sub (Proc s x a)) -> PRegistry s -> PRegistry s
 addChannelP subGenerator registry =
     { registry
         | nextId = registry.nextId + 1
-        , channels = Dict.insert registry.nextId (subGenerator registry.nextId) registry.channels
+
+        --, channels = Dict.insert registry.nextId (subGenerator registry.nextId) registry.channels
     }
 
 
 deleteChannel : Int -> Registry -> Registry
 deleteChannel channelId procModel =
     { procModel | channels = Dict.remove channelId procModel.channels }
+
+
+deleteChannelP : Int -> PRegistry s -> PRegistry s
+deleteChannelP channelId procModel =
+    --{ procModel | channels = Dict.remove channelId procModel.channels }
+    procModel
 
 
 sendMessage : msg -> Cmd msg
