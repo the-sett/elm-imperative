@@ -53,10 +53,9 @@ import Task exposing (Task)
 -- The imperative structure
 
 
-type alias PRegistry s =
+type alias PRegistry s x a =
     { nextId : Int
-
-    --, channels : Dict Int (Sub (Proc s x a))
+    , channels : Dict Int (Sub (Proc s x a))
     , state : s
     }
 
@@ -64,7 +63,7 @@ type alias PRegistry s =
 {-| Proc combines `Result`, `Task` and the state monad together.
 -}
 type Proc s x a
-    = State (PRegistry s -> ( PRegistry s, T s x a ))
+    = State (PRegistry s x a -> ( PRegistry s x a, T s x a ))
 
 
 type T s x a
@@ -106,7 +105,7 @@ type alias Registry =
 {-| Imperative Elm programs.
 -}
 type alias Program flags model err res =
-    Platform.Program flags (PRegistry model) (Proc model err res)
+    Platform.Program flags (PRegistry model err res) (Proc model err res)
 
 
 {-| Builds an imperative program from flags, an initial model and an imperative program structure.
@@ -120,16 +119,15 @@ program flags initFn io =
         }
 
 
-initp : s -> PRegistry s
+initp : s -> PRegistry s x a
 initp s =
     { nextId = 0
-
-    --, channels = Dict.empty
+    , channels = Dict.empty
     , state = s
     }
 
 
-eval : Proc s x a -> PRegistry s -> ( PRegistry s, Cmd (Proc s x a) )
+eval : Proc s x a -> PRegistry s x a -> ( PRegistry s x a, Cmd (Proc s x a) )
 eval (State io) reg =
     case io reg of
         ( nextReg, PTask t ) ->
@@ -320,7 +318,8 @@ onError ef (State io) =
                     (State stateFn) =
                         ef e
                 in
-                stateFn nextReg
+                --stateFn nextReg
+                Debug.todo ""
 
             ( nextReg, PInitiate generator ) ->
                 ( nextReg
@@ -864,7 +863,7 @@ addChannel subGenerator registry =
     }
 
 
-addChannelP : (Int -> Sub (Proc s x a)) -> PRegistry s -> PRegistry s
+addChannelP : (Int -> Sub (Proc s x a)) -> PRegistry s x a -> PRegistry s x a
 addChannelP subGenerator registry =
     { registry
         | nextId = registry.nextId + 1
@@ -878,7 +877,7 @@ deleteChannel channelId procModel =
     { procModel | channels = Dict.remove channelId procModel.channels }
 
 
-deleteChannelP : Int -> PRegistry s -> PRegistry s
+deleteChannelP : Int -> PRegistry s x a -> PRegistry s x a
 deleteChannelP channelId procModel =
     --{ procModel | channels = Dict.remove channelId procModel.channels }
     procModel
