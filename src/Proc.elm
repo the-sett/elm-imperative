@@ -53,9 +53,9 @@ import Task exposing (Task)
 -- The imperative structure
 
 
-type alias PRegistry s =
+type alias PRegistry s x a =
     { nextId : Int
-    , channels : Dict Int (Sub Msg)
+    , channels : Dict Int (Sub (Proc s x a))
     , state : s
     }
 
@@ -63,7 +63,7 @@ type alias PRegistry s =
 {-| Proc combines `Result`, `Task` and the state monad together.
 -}
 type Proc s x a
-    = State (PRegistry s -> ( PRegistry s, T s x a ))
+    = State (PRegistry s x a -> ( PRegistry s x a, T s x a ))
 
 
 type T s x a
@@ -71,11 +71,11 @@ type T s x a
     | POk a
     | PErr x
     | PInitiate (Int -> Cmd (Proc s x a))
+      --| PExecute Int (Cmd (Proc s x a))
+    | PSubscribe Int (Int -> Msg) (Int -> Sub (Proc s x a))
 
 
 
---| PExecute Int (Cmd (Proc s x a))
---| PSubscribe Int (Int -> Msg) (Int -> Sub (Proc s x a))
 --| PUnsubscribe Int Int (Proc s x a)
 
 
@@ -108,7 +108,7 @@ type alias Registry =
 {-| Imperative Elm programs.
 -}
 type alias Program flags model err res =
-    Platform.Program flags (PRegistry model) (Proc model err res)
+    Platform.Program flags (PRegistry model err res) (Proc model err res)
 
 
 {-| Builds an imperative program from flags, an initial model and an imperative program structure.
@@ -122,7 +122,7 @@ program flags initFn io =
         }
 
 
-initp : s -> PRegistry s
+initp : s -> PRegistry s x a
 initp s =
     { nextId = 0
     , channels = Dict.empty
@@ -130,7 +130,7 @@ initp s =
     }
 
 
-eval : Proc s x a -> PRegistry s -> ( PRegistry s, Cmd (Proc s x a) )
+eval : Proc s x a -> PRegistry s x a -> ( PRegistry s x a, Cmd (Proc s x a) )
 eval (State io) reg =
     case io reg of
         ( nextReg, PTask t ) ->
@@ -160,6 +160,12 @@ eval (State io) reg =
         ( nextReg, PInitiate generator ) ->
             ( { nextReg | nextId = nextReg.nextId + 1 }
             , generator nextReg.nextId
+            )
+
+        ( nextReg, PSubscribe _ messageGenerator subGenerator ) ->
+            ( addChannelP subGenerator nextReg
+            , messageGenerator nextReg.nextId
+                |> sendMessage
             )
 
 
@@ -271,6 +277,9 @@ andThen mf (State io) =
                 ( nextReg
                 , (generator >> Cmd.map (andThen mf)) |> PInitiate
                 )
+
+            ( nextReg, PSubscribe _ _ _ ) ->
+                Debug.todo ""
     )
         |> State
 
@@ -314,44 +323,14 @@ onError ef (State io) =
                 stateFn nextReg
 
             ( nextReg, PInitiate generator ) ->
-                let
-                    hole : Proc s x a -> Proc s y a
-                    hole p =
-                        Debug.todo ""
-                in
                 ( nextReg
-                , generator >> Cmd.map hole |> PInitiate
+                , generator >> Cmd.map (\p -> onError ef p) |> PInitiate
                 )
+
+            ( nextReg, PSubscribe _ _ _ ) ->
+                Debug.todo ""
     )
         |> State
-
-
-mapErrorp : (x -> y) -> Proc s x a -> Proc s y a
-mapErrorp mf (State io) =
-    --(\s ->
-    --    case io s of
-    --        ( nextReg, PTask t ) ->
-    --            ( nextReg
-    --            , Task.andThen (\inner -> Task.succeed (map mf inner)) t |> PTask
-    --            )
-    --
-    --        ( nextReg, POk x ) ->
-    --            ( nextReg
-    --            , mf x |> POk
-    --            )
-    --
-    --        ( nextReg, PErr e ) ->
-    --            ( nextReg
-    --            , PErr e
-    --            )
-    --
-    --        ( nextReg, PInitiate generator ) ->
-    --            ( nextReg
-    --            , (generator >> Cmd.map (map mf)) |> PInitiate
-    --            )
-    --)
-    --    |> State
-    Debug.todo ""
 
 
 {-| Applies a function the current value of an `Proc`, provided it is not on the error track.
@@ -379,6 +358,9 @@ map mf (State io) =
                 ( nextReg
                 , (generator >> Cmd.map (map mf)) |> PInitiate
                 )
+
+            ( nextReg, PSubscribe _ _ _ ) ->
+                Debug.todo ""
     )
         |> State
 
@@ -870,12 +852,20 @@ addChannel subGenerator registry =
     }
 
 
+addChannelP : (Int -> Sub (Proc s x a)) -> PRegistry s x a -> PRegistry s x a
+addChannelP subGenerator registry =
+    { registry
+        | nextId = registry.nextId + 1
+        , channels = Dict.insert registry.nextId (subGenerator registry.nextId) registry.channels
+    }
+
+
 deleteChannel : Int -> Registry -> Registry
 deleteChannel channelId procModel =
     { procModel | channels = Dict.remove channelId procModel.channels }
 
 
-sendMessage : Msg -> Cmd Msg
+sendMessage : msg -> Cmd msg
 sendMessage msg =
     Task.succeed ()
         |> Task.perform (always msg)
