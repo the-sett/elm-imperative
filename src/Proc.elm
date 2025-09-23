@@ -338,15 +338,16 @@ onError ef (State io) =
         |> State
 
 
-{-| Applies a function the current value of an `Proc`, provided it is not on the error track.
--}
-map : (a -> b) -> Proc s x a -> Proc s x b
-map mf (State io) =
+mapBoth : (a -> b) -> (x -> y) -> Proc s x a -> Proc s y b
+mapBoth mf ef (State io) =
     (\s ->
         case io s of
             ( nextReg, PTask t ) ->
                 ( nextReg
-                , Task.andThen (\inner -> Task.succeed (map mf inner)) t |> PTask
+                , t
+                    |> Task.andThen (\inner -> Task.succeed (mapBoth mf ef inner))
+                    |> Task.onError (\inner -> Task.fail (ef inner))
+                    |> PTask
                 )
 
             ( nextReg, POk x ) ->
@@ -356,24 +357,27 @@ map mf (State io) =
 
             ( nextReg, PErr e ) ->
                 ( nextReg
-                , PErr e
+                , ef e |> PErr
                 )
 
             ( nextReg, PInitiate generator ) ->
                 ( nextReg
-                , (generator >> Cmd.map (map mf)) |> PInitiate
+                , (generator >> Cmd.map (mapBoth mf ef)) |> PInitiate
                 )
-
-            ( nextReg, PSubscribe _ _ _ ) ->
-                Debug.todo ""
-
-            ( nextReg, PUnsubscribe _ _ _ ) ->
-                Debug.todo ""
-
-            ( nextReg, PExecute _ _ ) ->
-                Debug.todo ""
     )
         |> State
+
+
+mapErrorP : (x -> y) -> Proc s x a -> Proc s y a
+mapErrorP ef =
+    mapBoth identity ef
+
+
+{-| Applies a function the current value of an `Proc`, provided it is not on the error track.
+-}
+map : (a -> b) -> Proc s x a -> Proc s x b
+map mf =
+    mapBoth mf identity
 
 
 
