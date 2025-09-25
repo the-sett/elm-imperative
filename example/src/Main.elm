@@ -1,6 +1,5 @@
 module Main exposing (..)
 
-import Imp
 import Proc
 import Task
 
@@ -9,41 +8,41 @@ type alias Example =
     { messages : List String }
 
 
-example : Imp.Imp Example String ()
+example : Proc.Proc Example String ()
 example =
-    Imp.task (Task.succeed "success1")
-        |> Imp.andThen push
-        |> Imp.andThen (\_ -> Imp.err "error")
-        |> Imp.andThen push
-        |> Imp.onError recover
-        |> Imp.andThen (\_ -> Imp.pure "success2")
-        |> Imp.andThen push
-        |> Imp.andThen (\_ -> Imp.task (Task.succeed "task"))
-        |> Imp.andThen push
-        |> Imp.andThen (\_ -> Imp.task (Task.fail "failed task"))
-        |> Imp.andThen push
-        |> Imp.andThen (\_ -> Imp.pure "skipped pure")
-        |> Imp.andThen push
-        |> Imp.andThen (\_ -> Imp.task (Task.succeed "skipped task"))
-        |> Imp.andThen push
-        |> Imp.onError recover
-        |> Imp.andThen (\_ -> Imp.get)
-        |> Imp.map (\s -> Debug.log "state" s)
-        |> Imp.andThen (\_ -> Imp.modify (\state -> { state | messages = List.reverse state.messages }))
+    Proc.task (Task.succeed "success1")
+        |> Proc.andThen push
+        |> Proc.andThen (\_ -> Proc.err "error")
+        |> Proc.andThen push
+        |> Proc.onError recover
+        |> Proc.andThen (\_ -> Proc.pure "success2")
+        |> Proc.andThen push
+        |> Proc.andThen (\_ -> Proc.task (Task.succeed "task"))
+        |> Proc.andThen push
+        |> Proc.andThen (\_ -> Proc.task (Task.fail "failed task"))
+        |> Proc.andThen push
+        |> Proc.andThen (\_ -> Proc.pure "skipped pure")
+        |> Proc.andThen push
+        |> Proc.andThen (\_ -> Proc.task (Task.succeed "skipped task"))
+        |> Proc.andThen push
+        |> Proc.onError recover
+        |> Proc.andThen (\_ -> Proc.get)
+        |> Proc.map (\s -> Debug.log "state" s)
+        |> Proc.andThen (\_ -> Proc.modify (\state -> { state | messages = List.reverse state.messages }))
 
 
-push : String -> Imp.Imp Example String ()
+push : String -> Proc.Proc Example String ()
 push msg =
-    Imp.modify (\state -> { state | messages = msg :: state.messages })
+    Proc.modify (\state -> { state | messages = msg :: state.messages })
 
 
-recover : String -> Imp.Imp Example String ()
+recover : String -> Proc.Proc Example String ()
 recover msg =
-    Imp.pure ("recovered " ++ msg) |> Imp.andThen push
+    Proc.pure ("recovered " ++ msg) |> Proc.andThen push
 
 
 main =
-    Imp.program
+    Proc.program
         ()
         (always { messages = [ "initial" ] })
         example
