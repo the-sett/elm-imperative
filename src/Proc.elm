@@ -53,17 +53,10 @@ import Task exposing (Task)
 -- The imperative structure
 
 
-type alias PRegistry s x a =
-    { nextId : Int
-    , channels : Dict Int (Sub (Proc s x a))
-    , state : s
-    }
-
-
 {-| Proc combines `Result`, `Task` and the state monad together.
 -}
 type Proc s x a
-    = State (PRegistry s x a -> ( PRegistry s x a, T s x a ))
+    = State (s -> ( s, T s x a ))
 
 
 type T s x a
@@ -105,7 +98,7 @@ type alias Registry =
 {-| Imperative Elm programs.
 -}
 type alias Program flags model err res =
-    Platform.Program flags (PRegistry model err res) (Proc model err res)
+    Platform.Program flags model (Proc model err res)
 
 
 {-| Builds an imperative program from flags, an initial model and an imperative program structure.
@@ -113,25 +106,17 @@ type alias Program flags model err res =
 program : flags -> (flags -> model) -> Proc model err res -> Program flags model err res
 program flags initFn io =
     Platform.worker
-        { init = \_ -> eval io (initFn flags |> initp)
+        { init = \_ -> eval io (initFn flags)
         , update = eval
         , subscriptions = \_ -> Sub.none
         }
 
 
-initp : s -> PRegistry s x a
-initp s =
-    { nextId = 0
-    , channels = Dict.empty
-    , state = s
-    }
-
-
-eval : Proc s x a -> PRegistry s x a -> ( PRegistry s x a, Cmd (Proc s x a) )
+eval : Proc s x a -> s -> ( s, Cmd (Proc s x a) )
 eval (State io) reg =
     case io reg of
-        ( nextReg, PTask t ) ->
-            ( nextReg
+        ( nextS, PTask t ) ->
+            ( nextS
             , Task.attempt
                 (\r ->
                     case r of
@@ -144,34 +129,38 @@ eval (State io) reg =
                 t
             )
 
-        ( nextReg, POk x ) ->
-            ( nextReg
+        ( nextS, POk x ) ->
+            ( nextS
             , Cmd.none
             )
 
-        ( nextReg, PErr e ) ->
-            ( nextReg
+        ( nextS, PErr e ) ->
+            ( nextS
             , Cmd.none
             )
 
-        ( nextReg, PInitiate generator ) ->
-            ( { nextReg | nextId = nextReg.nextId + 1 }
-            , generator nextReg.nextId
-            )
+        ( nextS, PInitiate generator ) ->
+            --( { nextS | nextId = nextS.nextId + 1 }
+            --( nextS
+            --, generator nextS.nextId
+            --)
+            Debug.todo ""
 
-        ( nextReg, PSubscribe _ messageGenerator subGenerator ) ->
-            ( addChannelP subGenerator nextReg
-            , messageGenerator nextReg.nextId
-                |> sendMessage
-            )
+        ( nextS, PSubscribe _ messageGenerator subGenerator ) ->
+            --( addChannelP subGenerator nextS
+            --, messageGenerator nextS.nextId
+            --    |> sendMessage
+            --)
+            Debug.todo ""
 
-        ( nextReg, PUnsubscribe _ channelId nextMessage ) ->
-            ( deleteChannelP channelId nextReg
-            , sendMessage nextMessage
-            )
+        ( nextS, PUnsubscribe _ channelId nextMessage ) ->
+            --( deleteChannelP channelId nextS
+            --, sendMessage nextMessage
+            --)
+            Debug.todo ""
 
-        ( nextReg, PExecute _ cmd ) ->
-            ( nextReg
+        ( nextS, PExecute _ cmd ) ->
+            ( nextS
             , cmd
             )
 
@@ -223,12 +212,12 @@ value for the program.
 -}
 advance : (s -> ( s, a )) -> Proc s x a
 advance fn =
-    (\reg ->
+    (\s ->
         let
-            ( s, a ) =
-                fn reg.state
+            ( nextS, a ) =
+                fn s
         in
-        ( { reg | state = s }, POk a )
+        ( nextS, POk a )
     )
         |> State
 
@@ -245,41 +234,42 @@ depends on the results of the one before.
 -}
 andThen : (a -> Proc s x b) -> Proc s x a -> Proc s x b
 andThen mf (State io) =
-    (\s ->
-        case io s of
-            ( nextReg, PTask t ) ->
-                ( nextReg
-                , Task.andThen (\inner -> Task.succeed (andThen mf inner)) t
-                    |> PTask
-                )
-
-            ( nextReg, POk x ) ->
-                let
-                    (State stateFn) =
-                        mf x
-                in
-                stateFn nextReg
-
-            ( nextReg, PErr e ) ->
-                ( nextReg
-                , PErr e
-                )
-
-            ( nextReg, PInitiate generator ) ->
-                ( nextReg
-                , (generator >> Cmd.map (andThen mf)) |> PInitiate
-                )
-
-            ( nextReg, PSubscribe _ _ _ ) ->
-                Debug.todo ""
-
-            ( nextReg, PUnsubscribe _ _ _ ) ->
-                Debug.todo ""
-
-            ( nextReg, PExecute _ _ ) ->
-                Debug.todo ""
-    )
-        |> State
+    --(\s ->
+    --    case io s of
+    --        ( nextS, PTask t ) ->
+    --            ( nextS
+    --            , Task.andThen (\inner -> Task.succeed (andThen mf inner)) t
+    --                |> PTask
+    --            )
+    --
+    --        ( nextS, POk x ) ->
+    --            let
+    --                (State stateFn) =
+    --                    mf x
+    --            in
+    --            stateFn nextS
+    --
+    --        ( nextS, PErr e ) ->
+    --            ( nextS
+    --            , PErr e
+    --            )
+    --
+    --        ( nextS, PInitiate generator ) ->
+    --            ( nextS
+    --            , (generator >> Cmd.map (andThen mf)) |> PInitiate
+    --            )
+    --
+    --        ( nextS, PSubscribe _ _ _ ) ->
+    --            Debug.todo ""
+    --
+    --        ( nextS, PUnsubscribe _ _ _ ) ->
+    --            Debug.todo ""
+    --
+    --        ( nextS, PExecute _ _ ) ->
+    --            Debug.todo ""
+    --)
+    --    |> State
+    Debug.todo ""
 
 
 {-| Apply the function that is inside `Proc` to a value that is inside `Proc`. Return the result
@@ -300,70 +290,80 @@ recover back onto the success track.
 -}
 onError : (x -> Proc s y a) -> Proc s x a -> Proc s y a
 onError ef (State io) =
-    (\s ->
-        case io s of
-            ( nextReg, PTask t ) ->
-                ( nextReg
-                , Task.onError
-                    (\e -> ef e |> Task.succeed)
-                    (t |> Task.map (onError ef))
-                    |> PTask
-                )
-
-            ( nextReg, POk x ) ->
-                ( nextReg, POk x )
-
-            ( nextReg, PErr e ) ->
-                let
-                    (State stateFn) =
-                        ef e
-                in
-                --stateFn nextReg
-                Debug.todo ""
-
-            ( nextReg, PInitiate generator ) ->
-                ( nextReg
-                , generator >> Cmd.map (\p -> onError ef p) |> PInitiate
-                )
-
-            ( nextReg, PSubscribe _ _ _ ) ->
-                Debug.todo ""
-
-            ( nextReg, PUnsubscribe _ _ _ ) ->
-                Debug.todo ""
-
-            ( nextReg, PExecute _ _ ) ->
-                Debug.todo ""
-    )
-        |> State
+    --(\s ->
+    --    case io s of
+    --        ( nextS, PTask t ) ->
+    --            ( nextS
+    --            , Task.onError
+    --                (\e -> ef e |> Task.succeed)
+    --                (t |> Task.map (onError ef))
+    --                |> PTask
+    --            )
+    --
+    --        ( nextS, POk x ) ->
+    --            ( nextS, POk x )
+    --
+    --        ( nextS, PErr e ) ->
+    --            let
+    --                (State stateFn) =
+    --                    ef e
+    --            in
+    --            --stateFn nextS
+    --            Debug.todo ""
+    --
+    --        ( nextS, PInitiate generator ) ->
+    --            ( nextS
+    --            , generator >> Cmd.map (\p -> onError ef p) |> PInitiate
+    --            )
+    --
+    --        ( nextS, PSubscribe _ _ _ ) ->
+    --            Debug.todo ""
+    --
+    --        ( nextS, PUnsubscribe _ _ _ ) ->
+    --            Debug.todo ""
+    --
+    --        ( nextS, PExecute _ _ ) ->
+    --            Debug.todo ""
+    --)
+    --    |> State
+    Debug.todo ""
 
 
 mapBoth : (a -> b) -> (x -> y) -> Proc s x a -> Proc s y b
 mapBoth mf ef (State io) =
     (\s ->
         case io s of
-            ( nextReg, PTask t ) ->
-                ( nextReg
+            ( nextS, PTask t ) ->
+                ( nextS
                 , t
                     |> Task.andThen (\inner -> Task.succeed (mapBoth mf ef inner))
                     |> Task.onError (\inner -> Task.fail (ef inner))
                     |> PTask
                 )
 
-            ( nextReg, POk x ) ->
-                ( nextReg
+            ( nextS, POk x ) ->
+                ( nextS
                 , mf x |> POk
                 )
 
-            ( nextReg, PErr e ) ->
-                ( nextReg
+            ( nextS, PErr e ) ->
+                ( nextS
                 , ef e |> PErr
                 )
 
-            ( nextReg, PInitiate generator ) ->
-                ( nextReg
+            ( nextS, PInitiate generator ) ->
+                ( nextS
                 , (generator >> Cmd.map (mapBoth mf ef)) |> PInitiate
                 )
+
+            ( nextS, PSubscribe _ messageGenerator subGenerator ) ->
+                Debug.todo ""
+
+            ( nextS, PUnsubscribe _ channelId nextMessage ) ->
+                Debug.todo ""
+
+            ( nextS, PExecute _ _ ) ->
+                Debug.todo ""
     )
         |> State
 
@@ -477,21 +477,21 @@ map6 f p1 p2 p3 p4 p5 p6 =
 -}
 get : Proc s x s
 get =
-    State (\reg -> ( reg, POk reg.state ))
+    State (\s -> ( s, POk s ))
 
 
 {-| An `Proc` that takes the given current state.
 -}
 put : s -> Proc s x ()
 put s =
-    State (\reg -> ( { reg | state = s }, POk () ))
+    State (\_ -> ( s, POk () ))
 
 
 {-| Applies a function to the current state to produce an `Proc` with a new current state.
 -}
 modify : (s -> s) -> Proc s x ()
 modify fn =
-    State (\reg -> ( { reg | state = fn reg.state }, POk () ))
+    State (\s -> ( fn s, POk () ))
 
 
 
@@ -867,13 +867,14 @@ addChannel subGenerator registry =
     }
 
 
-addChannelP : (Int -> Sub (Proc s x a)) -> PRegistry s x a -> PRegistry s x a
+addChannelP : (Int -> Sub (Proc s x a)) -> s -> s
 addChannelP subGenerator registry =
-    { registry
-        | nextId = registry.nextId + 1
-
-        --, channels = Dict.insert registry.nextId (subGenerator registry.nextId) registry.channels
-    }
+    --{ registry
+    --    | nextId = registry.nextId + 1
+    --
+    --    --, channels = Dict.insert registry.nextId (subGenerator registry.nextId) registry.channels
+    --}
+    Debug.todo ""
 
 
 deleteChannel : Int -> Registry -> Registry
@@ -881,7 +882,7 @@ deleteChannel channelId procModel =
     { procModel | channels = Dict.remove channelId procModel.channels }
 
 
-deleteChannelP : Int -> PRegistry s x a -> PRegistry s x a
+deleteChannelP : Int -> s -> s
 deleteChannelP channelId procModel =
     --{ procModel | channels = Dict.remove channelId procModel.channels }
     procModel
