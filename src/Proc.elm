@@ -53,6 +53,13 @@ import Task exposing (Task)
 -- The imperative structure
 
 
+type alias PRegistry x s a =
+    { nextId : Int
+    , channels : Dict Int (Sub (Proc s x a))
+    , state : s
+    }
+
+
 {-| Proc combines `Result`, `Task` and the state monad together.
 -}
 type Proc s x a
