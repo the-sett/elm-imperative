@@ -281,13 +281,26 @@ andThen mf (State io) =
                 )
 
             ( nextS, PSubscribe procId generator subGenerator ) ->
-                Debug.todo ""
+                let
+                    mappedGen =
+                        generator >> andThen mf
+
+                    mappedSubGen =
+                        subGenerator >> Sub.map (andThen mf)
+                in
+                ( nextS
+                , PSubscribe procId mappedGen mappedSubGen
+                )
 
             ( nextS, PUnsubscribe procId channelId nextProc ) ->
-                Debug.todo ""
+                ( nextS
+                , andThen mf nextProc |> PUnsubscribe procId channelId
+                )
 
             ( nextS, PExecute procId command ) ->
-                Debug.todo ""
+                ( nextS
+                , Cmd.map (\p -> andThen mf p) command |> PExecute procId
+                )
     )
         |> State
 
@@ -328,8 +341,7 @@ onError ef (State io) =
                     (State stateFn) =
                         ef e
                 in
-                --stateFn nextS
-                Debug.todo ""
+                stateFn nextS
 
             ( nextS, PInitiate generator ) ->
                 ( nextS
@@ -337,13 +349,26 @@ onError ef (State io) =
                 )
 
             ( nextS, PSubscribe procId generator subGenerator ) ->
-                Debug.todo ""
+                let
+                    mappedGen =
+                        generator >> onError ef
+
+                    mappedSubGen =
+                        subGenerator >> Sub.map (onError ef)
+                in
+                ( nextS
+                , PSubscribe procId mappedGen mappedSubGen
+                )
 
             ( nextS, PUnsubscribe procId channelId nextProc ) ->
-                Debug.todo ""
+                ( nextS
+                , onError ef nextProc |> PUnsubscribe procId channelId
+                )
 
             ( nextS, PExecute procId command ) ->
-                Debug.todo ""
+                ( nextS
+                , Cmd.map (\p -> onError ef p) command |> PExecute procId
+                )
     )
         |> State
 
