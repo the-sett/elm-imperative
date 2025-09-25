@@ -201,6 +201,29 @@ sendMessage msg =
 
 
 
+-- Not sure yet what to do with these:
+
+
+try : (Result e a -> Msg) -> Procedure e a -> Cmd Msg
+try tagger (Procedure procedure) =
+    Task.succeed (\procId -> procedure procId tagger)
+        |> Task.perform Initiate
+
+
+run : (a -> Msg) -> Procedure Never a -> Cmd Msg
+run tagger =
+    try
+        (\res ->
+            case res of
+                Ok data ->
+                    tagger data
+
+                Err e ->
+                    never e
+        )
+
+
+
 -- Constructors
 
 
@@ -439,8 +462,8 @@ mapBoth mf ef (State io) =
         |> State
 
 
-mapErrorP : (x -> y) -> Proc s x a -> Proc s y a
-mapErrorP ef =
+mapError : (x -> y) -> Proc s x a -> Proc s y a
+mapError ef =
     mapBoth identity ef
 
 
@@ -631,155 +654,6 @@ endWith command =
         |> Procedure
 
 
-provide : a -> Procedure e a
-provide =
-    Task.succeed >> fromTask
-
-
-fromTask : Task e a -> Procedure e a
-fromTask t =
-    (\_ resultTagger ->
-        Task.attempt resultTagger t
-    )
-        |> Procedure
-
-
-break : e -> Procedure e a
-break =
-    Task.fail >> fromTask
-
-
-
---
---
---catch : (e -> Procedure f a) -> Procedure e a -> Procedure f a
---catch generator procedure =
---    (\aResult ->
---        case aResult of
---            Ok aData ->
---                provide aData
---
---            Err eData ->
---                generator eData
---    )
---        |> next procedure
---andThen : (a -> Procedure e b) -> Procedure e a -> Procedure e b
---andThen generator procedure =
---    (\aResult ->
---        case aResult of
---            Ok aData ->
---                generator aData
---
---            Err eData ->
---                break eData
---    )
---        |> next procedure
---collect : List (Procedure e a) -> Procedure e (List a)
---collect procedures =
---    case procedures of
---        [] ->
---            emptyProcedure
---
---        procedure :: remainingProcedures ->
---            List.foldl (addToList >> andThen) (addToList procedure []) remainingProcedures
-
-
-addToList : Procedure e a -> List a -> Procedure e (List a)
-addToList procedure collector =
-    (\aResult ->
-        case aResult of
-            Ok aData ->
-                [ aData ]
-                    |> List.append collector
-                    |> provide
-
-            Err eData ->
-                break eData
-    )
-        |> next procedure
-
-
-emptyProcedure : Procedure e a
-emptyProcedure =
-    (\_ _ -> Cmd.none) |> Procedure
-
-
-
---map : (a -> b) -> Procedure e a -> Procedure e b
---map mapper =
---    andThen (mapper >> provide)
---
---
---map2 : (a -> b -> c) -> Procedure e a -> Procedure e b -> Procedure e c
---map2 mapper procedureA procedureB =
---    procedureA
---        |> andThen
---            (\aData ->
---                procedureB
---                    |> map (mapper aData)
---            )
---
---
---map3 : (a -> b -> c -> d) -> Procedure e a -> Procedure e b -> Procedure e c -> Procedure e d
---map3 mapper procedureA procedureB procedureC =
---    procedureA
---        |> andThen
---            (\aData ->
---                map2 (mapper aData) procedureB procedureC
---            )
---
---
-
-
-mapError : (e -> f) -> Procedure e a -> Procedure f a
-mapError mapper procedure =
-    (\aResult ->
-        case aResult of
-            Ok aData ->
-                provide aData
-
-            Err eData ->
-                mapper eData
-                    |> break
-    )
-        |> next procedure
-
-
-next : Procedure e a -> (Result e a -> Procedure f b) -> Procedure f b
-next (Procedure procedure) resultMapper =
-    (\procId tagger ->
-        (\aResult ->
-            let
-                (Procedure nextProcedure) =
-                    resultMapper aResult
-            in
-            nextProcedure procId tagger
-                |> Execute procId
-        )
-            |> procedure procId
-    )
-        |> Procedure
-
-
-try : (Result e a -> Msg) -> Procedure e a -> Cmd Msg
-try tagger (Procedure procedure) =
-    Task.succeed (\procId -> procedure procId tagger)
-        |> Task.perform Initiate
-
-
-run : (a -> Msg) -> Procedure Never a -> Cmd Msg
-run tagger =
-    try
-        (\res ->
-            case res of
-                Ok data ->
-                    tagger data
-
-                Err e ->
-                    never e
-        )
-
-
 
 -- Channel
 
@@ -838,33 +712,34 @@ accept =
 acceptUntil : (a -> Bool) -> Channel s x a -> Proc s x a
 acceptUntil shouldUnsubscribe (Channel channel) =
     (\s ->
-        let
-            requestCommandMsg channelId =
-                channel.request (channelKey channelId)
-                    |> PExecute procId
-
-            subGenerator channelId =
-                (\aData ->
-                    if channel.shouldAccept (channelKey channelId) aData then
-                        generateMsg channelId aData
-
-                    else
-                        Continue
-                )
-                    |> channel.subscription
-
-            generateMsg channelId aData =
-                if shouldUnsubscribe aData then
-                    Ok aData
-                        |> resultTagger
-                        |> PUnsubscribe procId channelId
-
-                else
-                    Ok aData
-                        |> resultTagger
-        in
-        Task.succeed subGenerator
-            |> Task.perform (PSubscribe procId requestCommandMsg)
+        --let
+        --    requestCommandMsg channelId =
+        --        channel.request (channelKey channelId)
+        --            |> PExecute procId
+        --
+        --    subGenerator channelId =
+        --        (\aData ->
+        --            if channel.shouldAccept (channelKey channelId) aData then
+        --                generateMsg channelId aData
+        --
+        --            else
+        --                Continue
+        --        )
+        --            |> channel.subscription
+        --
+        --    generateMsg channelId aData =
+        --        if shouldUnsubscribe aData then
+        --            Ok aData
+        --                |> resultTagger
+        --                |> PUnsubscribe procId channelId
+        --
+        --        else
+        --            Ok aData
+        --                |> resultTagger
+        --in
+        --Task.succeed subGenerator
+        --    |> Task.perform (PSubscribe procId requestCommandMsg)
+        Debug.todo ""
     )
         |> State
 
@@ -882,3 +757,120 @@ defaultRequest _ =
 defaultPredicate : String -> a -> Bool
 defaultPredicate _ _ =
     True
+
+
+
+--provide : a -> Procedure e a
+--provide =
+--    Task.succeed >> fromTask
+--
+--
+--fromTask : Task e a -> Procedure e a
+--fromTask t =
+--    (\_ resultTagger ->
+--        Task.attempt resultTagger t
+--    )
+--        |> Procedure
+--
+--
+--break : e -> Procedure e a
+--break =
+--    Task.fail >> fromTask
+--
+--
+--catch : (e -> Procedure f a) -> Procedure e a -> Procedure f a
+--catch generator procedure =
+--    (\aResult ->
+--        case aResult of
+--            Ok aData ->
+--                provide aData
+--
+--            Err eData ->
+--                generator eData
+--    )
+--        |> next procedure
+--andThen : (a -> Procedure e b) -> Procedure e a -> Procedure e b
+--andThen generator procedure =
+--    (\aResult ->
+--        case aResult of
+--            Ok aData ->
+--                generator aData
+--
+--            Err eData ->
+--                break eData
+--    )
+--        |> next procedure
+--collect : List (Procedure e a) -> Procedure e (List a)
+--collect procedures =
+--    case procedures of
+--        [] ->
+--            emptyProcedure
+--
+--        procedure :: remainingProcedures ->
+--            List.foldl (addToList >> andThen) (addToList procedure []) remainingProcedures
+--addToList : Procedure e a -> List a -> Procedure e (List a)
+--addToList procedure collector =
+--    (\aResult ->
+--        case aResult of
+--            Ok aData ->
+--                [ aData ]
+--                    |> List.append collector
+--                    |> provide
+--
+--            Err eData ->
+--                break eData
+--    )
+--        |> next procedure
+--emptyProcedure : Procedure e a
+--emptyProcedure =
+--    (\_ _ -> Cmd.none) |> Procedure
+--map : (a -> b) -> Procedure e a -> Procedure e b
+--map mapper =
+--    andThen (mapper >> provide)
+--
+--
+--map2 : (a -> b -> c) -> Procedure e a -> Procedure e b -> Procedure e c
+--map2 mapper procedureA procedureB =
+--    procedureA
+--        |> andThen
+--            (\aData ->
+--                procedureB
+--                    |> map (mapper aData)
+--            )
+--
+--
+--map3 : (a -> b -> c -> d) -> Procedure e a -> Procedure e b -> Procedure e c -> Procedure e d
+--map3 mapper procedureA procedureB procedureC =
+--    procedureA
+--        |> andThen
+--            (\aData ->
+--                map2 (mapper aData) procedureB procedureC
+--            )
+--
+--
+--mapError : (e -> f) -> Procedure e a -> Procedure f a
+--mapError mapper procedure =
+--    (\aResult ->
+--        case aResult of
+--            Ok aData ->
+--                provide aData
+--
+--            Err eData ->
+--                mapper eData
+--                    |> break
+--    )
+--        |> next procedure
+--next : Procedure e a -> (Result e a -> Procedure f b) -> Procedure f b
+--next (Procedure procedure) resultMapper =
+--    (\procId tagger ->
+--        (\aResult ->
+--            let
+--                (Procedure nextProcedure) =
+--                    resultMapper aResult
+--            in
+--            nextProcedure procId tagger
+--                |> Execute procId
+--        )
+--            |> procedure procId
+--    )
+--        |> Procedure
