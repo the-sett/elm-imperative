@@ -88,16 +88,6 @@ type Procedure e a
     = Procedure (Int -> (Result e a -> Msg) -> Cmd Msg)
 
 
-type Model
-    = Model Registry
-
-
-type alias Registry =
-    { nextId : Int
-    , channels : Dict Int (Sub Msg)
-    }
-
-
 
 -- Imperative programs
 
@@ -115,7 +105,7 @@ program flags initFn io =
     Platform.worker
         { init = \_ -> eval io (initFn flags |> initReg)
         , update = eval
-        , subscriptions = \_ -> Sub.none
+        , subscriptions = subscriptions
         }
 
 
@@ -124,6 +114,12 @@ initReg s =
     , channels = Dict.empty
     , state = s
     }
+
+
+subscriptions : PRegistry s x a -> Sub (Proc s x a)
+subscriptions registry =
+    Dict.values registry.channels
+        |> Sub.batch
 
 
 eval : Proc s x a -> PRegistry s x a -> ( PRegistry s x a, Cmd (Proc s x a) )
@@ -164,7 +160,7 @@ eval (State io) reg =
         ( nextS, PSubscribe _ messageGenerator subGenerator ) ->
             let
                 nextReg =
-                    addChannelP subGenerator reg
+                    addChannel subGenerator reg
             in
             ( { nextReg | state = nextS }
             , messageGenerator reg.nextId
@@ -174,7 +170,7 @@ eval (State io) reg =
         ( nextS, PUnsubscribe _ channelId nextMessage ) ->
             let
                 nextReg =
-                    deleteChannelP channelId reg
+                    deleteChannel channelId reg
             in
             ( { nextReg | state = nextS }
             , sendMessage nextMessage
@@ -184,6 +180,24 @@ eval (State io) reg =
             ( { reg | state = nextS }
             , cmd
             )
+
+
+addChannel : (Int -> Sub (Proc s x a)) -> PRegistry s x a -> PRegistry s x a
+addChannel subGenerator reg =
+    { reg
+        | nextId = reg.nextId + 1
+        , channels = Dict.insert reg.nextId (subGenerator reg.nextId) reg.channels
+    }
+
+
+deleteChannel : Int -> PRegistry s x a -> PRegistry s x a
+deleteChannel channelId reg =
+    { reg | channels = Dict.remove channelId reg.channels }
+
+
+sendMessage : msg -> Cmd msg
+sendMessage msg =
+    Task.succeed () |> Task.perform (always msg)
 
 
 
@@ -635,20 +649,20 @@ break =
     Task.fail >> fromTask
 
 
-catch : (e -> Procedure f a) -> Procedure e a -> Procedure f a
-catch generator procedure =
-    (\aResult ->
-        case aResult of
-            Ok aData ->
-                provide aData
 
-            Err eData ->
-                generator eData
-    )
-        |> next procedure
-
-
-
+--
+--
+--catch : (e -> Procedure f a) -> Procedure e a -> Procedure f a
+--catch generator procedure =
+--    (\aResult ->
+--        case aResult of
+--            Ok aData ->
+--                provide aData
+--
+--            Err eData ->
+--                generator eData
+--    )
+--        |> next procedure
 --andThen : (a -> Procedure e b) -> Procedure e a -> Procedure e b
 --andThen generator procedure =
 --    (\aResult ->
@@ -770,24 +784,24 @@ run tagger =
 -- Channel
 
 
-type Channel a
+type Channel s x a
     = Channel
-        { request : String -> Cmd Msg
-        , subscription : (a -> Msg) -> Sub Msg
+        { request : String -> Cmd (Proc s x a)
+        , subscription : a -> Proc s x a -> Sub (Proc s x a)
         , shouldAccept : String -> a -> Bool
         }
 
 
-type ChannelRequest
-    = ChannelRequest (String -> Cmd Msg)
+type ChannelRequest s x a
+    = ChannelRequest (String -> Cmd (Proc s x a))
 
 
-open : (String -> Cmd Msg) -> ChannelRequest
+open : (String -> Cmd (Proc s x a)) -> ChannelRequest s x a
 open =
     ChannelRequest
 
 
-connect : ((a -> Msg) -> Sub Msg) -> ChannelRequest -> Channel a
+connect : (a -> Proc s x a -> Sub (Proc s x a)) -> ChannelRequest s x a -> Channel s x a
 connect generator (ChannelRequest requestGenerator) =
     Channel
         { request = requestGenerator
@@ -796,7 +810,7 @@ connect generator (ChannelRequest requestGenerator) =
         }
 
 
-join : ((a -> Msg) -> Sub Msg) -> Channel a
+join : (a -> Proc s x a -> Sub (Proc s x a)) -> Channel s x a
 join generator =
     Channel
         { request = defaultRequest
@@ -805,29 +819,29 @@ join generator =
         }
 
 
-filter : (String -> a -> Bool) -> Channel a -> Channel a
+filter : (String -> a -> Bool) -> Channel s x a -> Channel s x a
 filter predicate (Channel channel) =
     Channel
         { channel | shouldAccept = predicate }
 
 
-acceptOne : Channel a -> Procedure e a
+acceptOne : Channel s x a -> Proc s x a
 acceptOne =
     always True |> acceptUntil
 
 
-accept : Channel a -> Procedure e a
+accept : Channel s x a -> Proc s x a
 accept =
     always False |> acceptUntil
 
 
-acceptUntil : (a -> Bool) -> Channel a -> Procedure e a
+acceptUntil : (a -> Bool) -> Channel s x a -> Proc s x a
 acceptUntil shouldUnsubscribe (Channel channel) =
-    (\procId resultTagger ->
+    (\s ->
         let
             requestCommandMsg channelId =
                 channel.request (channelKey channelId)
-                    |> Execute procId
+                    |> PExecute procId
 
             subGenerator channelId =
                 (\aData ->
@@ -843,16 +857,16 @@ acceptUntil shouldUnsubscribe (Channel channel) =
                 if shouldUnsubscribe aData then
                     Ok aData
                         |> resultTagger
-                        |> Unsubscribe procId channelId
+                        |> PUnsubscribe procId channelId
 
                 else
                     Ok aData
                         |> resultTagger
         in
         Task.succeed subGenerator
-            |> Task.perform (Subscribe procId requestCommandMsg)
+            |> Task.perform (PSubscribe procId requestCommandMsg)
     )
-        |> Procedure
+        |> State
 
 
 channelKey : Int -> String
@@ -860,7 +874,7 @@ channelKey channelId =
     "Channel-" ++ String.fromInt channelId
 
 
-defaultRequest : String -> Cmd Msg
+defaultRequest : String -> Cmd (Proc s x a)
 defaultRequest _ =
     Cmd.none
 
@@ -868,87 +882,3 @@ defaultRequest _ =
 defaultPredicate : String -> a -> Bool
 defaultPredicate _ _ =
     True
-
-
-
--- Program
-
-
-init : Model
-init =
-    { nextId = 0
-    , channels = Dict.empty
-    }
-        |> Model
-
-
-update : Msg -> Model -> ( Model, Cmd Msg )
-update msg (Model registry) =
-    updateProcedures msg registry
-        |> Tuple.mapFirst Model
-
-
-updateProcedures : Msg -> Registry -> ( Registry, Cmd Msg )
-updateProcedures msg registry =
-    case msg of
-        Initiate generator ->
-            ( { registry | nextId = registry.nextId + 1 }
-            , generator registry.nextId
-            )
-
-        Execute _ cmd ->
-            ( registry
-            , cmd
-            )
-
-        Subscribe _ messageGenerator subGenerator ->
-            ( addChannel subGenerator registry
-            , messageGenerator registry.nextId
-                |> sendMessage
-            )
-
-        Unsubscribe _ channelId nextMessage ->
-            ( deleteChannel channelId registry
-            , sendMessage nextMessage
-            )
-
-        Continue ->
-            ( registry, Cmd.none )
-
-
-addChannel : (Int -> Sub Msg) -> Registry -> Registry
-addChannel subGenerator registry =
-    { registry
-        | nextId = registry.nextId + 1
-        , channels = Dict.insert registry.nextId (subGenerator registry.nextId) registry.channels
-    }
-
-
-addChannelP : (Int -> Sub (Proc s x a)) -> PRegistry s x a -> PRegistry s x a
-addChannelP subGenerator reg =
-    { reg
-        | nextId = reg.nextId + 1
-        , channels = Dict.insert reg.nextId (subGenerator reg.nextId) reg.channels
-    }
-
-
-deleteChannel : Int -> Registry -> Registry
-deleteChannel channelId procModel =
-    { procModel | channels = Dict.remove channelId procModel.channels }
-
-
-deleteChannelP : Int -> PRegistry s x a -> PRegistry s x a
-deleteChannelP channelId reg =
-    { reg | channels = Dict.remove channelId reg.channels }
-
-
-sendMessage : msg -> Cmd msg
-sendMessage msg =
-    Task.succeed ()
-        |> Task.perform (always msg)
-
-
-subscriptions : Model -> Sub Msg
-subscriptions (Model registry) =
-    Dict.values registry.channels
-        |> Sub.batch
