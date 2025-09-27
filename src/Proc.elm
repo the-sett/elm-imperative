@@ -1,11 +1,14 @@
 module Proc exposing
     ( Proc
     , Program, program
-    , pure, err, result, task, advance
+    , pure, err, result, task, do, advance
     , andThen, andMap, onError, map
     , map2, map3, map4, map5, map6
     , get, put, modify
     , sequence
+    , Channel, ChannelRequest
+    , join, open, connect, filter
+    , accept, acceptOne, acceptUntil
     )
 
 {-| Proc provides a structure that combines 3 things; `Result`, `Procedure` and the
@@ -21,7 +24,7 @@ state monad. This helps you do stateful programming with IO and error handling.
 
 # Constructors
 
-@docs pure, err, result, task, advance
+@docs pure, err, result, task, do, advance
 
 
 # Combinators for building imperative programs
@@ -42,6 +45,13 @@ state monad. This helps you do stateful programming with IO and error handling.
 # Sequencing lists of imperatives
 
 @docs sequence
+
+
+# Work with subscriptions
+
+@docs Channel, ChannelRequest
+@docs join, open, connect, filter
+@docs accept, acceptOne, acceptUntil
 
 -}
 
@@ -77,16 +87,6 @@ type T s x a
 
 
 
---type Msg
---    = Initiate (Int -> Cmd Msg)
---    | Execute Int (Cmd Msg)
---    | Subscribe Int (Int -> Msg) (Int -> Sub Msg)
---    | Unsubscribe Int Int Msg
---    | Continue
---
---
---type Proc e a
---    = Procedure (Int -> (Result e a -> Msg) -> Cmd Msg)
 -- Imperative programs
 
 
@@ -623,6 +623,15 @@ type ChannelRequest s x a
     = ChannelRequest (String -> Cmd (Proc s x a))
 
 
+join : ((a -> Proc s x a) -> Sub (Proc s x a)) -> Channel s x a
+join generator =
+    Channel
+        { request = defaultRequest
+        , subscription = generator
+        , shouldAccept = defaultPredicate
+        }
+
+
 open : (String -> Cmd (Proc s x a)) -> ChannelRequest s x a
 open =
     ChannelRequest
@@ -632,15 +641,6 @@ connect : ((a -> Proc s x a) -> Sub (Proc s x a)) -> ChannelRequest s x a -> Cha
 connect generator (ChannelRequest requestGenerator) =
     Channel
         { request = requestGenerator
-        , subscription = generator
-        , shouldAccept = defaultPredicate
-        }
-
-
-join : ((a -> Proc s x a) -> Sub (Proc s x a)) -> Channel s x a
-join generator =
-    Channel
-        { request = defaultRequest
         , subscription = generator
         , shouldAccept = defaultPredicate
         }
