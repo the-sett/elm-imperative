@@ -18,7 +18,7 @@ state monad. This helps you do stateful programming with IO and error handling.
 
 # Combinators for building imperative programs
 
-@docs andThen, andMap, onError, map
+@docs andThen, andMap, onError, map, mapError
 
 
 # More maps
@@ -45,6 +45,16 @@ import Task exposing (Task)
 -- Internal
 
 
+type Model msg
+    = Model (Registry msg)
+
+
+type alias Registry msg =
+    { nextId : Int
+    , channels : Dict Int (Sub msg)
+    }
+
+
 type Msg msg
     = Initiate (Int -> Cmd msg)
     | Execute Int (Cmd msg)
@@ -53,31 +63,31 @@ type Msg msg
     | Continue
 
 
-type Procedure e a msg
-    = Procedure (Int -> (Msg msg -> msg) -> (Result e a -> msg) -> Cmd msg)
+type Proc e a msg
+    = Proc (Int -> (Msg msg -> msg) -> (Result e a -> msg) -> Cmd msg)
 
 
 
 -- Procedure
 
 
-fetch : ((a -> msg) -> Cmd msg) -> Procedure e a msg
+fetch : ((a -> msg) -> Cmd msg) -> Proc e a msg
 fetch generator =
     (\_ _ tagger ->
         (Ok >> tagger) |> generator
     )
-        |> Procedure
+        |> Proc
 
 
-fetchResult : ((Result e a -> msg) -> Cmd msg) -> Procedure e a msg
+fetchResult : ((Result e a -> msg) -> Cmd msg) -> Proc e a msg
 fetchResult generator =
     (\_ _ tagger ->
         generator tagger
     )
-        |> Procedure
+        |> Proc
 
 
-do : Cmd msg -> Procedure Never () msg
+do : Cmd msg -> Proc Never () msg
 do command =
     (\procId msgTagger resultTagger ->
         Task.succeed ()
@@ -93,10 +103,10 @@ do command =
                         |> msgTagger
                 )
     )
-        |> Procedure
+        |> Proc
 
 
-endWith : Cmd msg -> Procedure Never Never msg
+endWith : Cmd msg -> Proc Never Never msg
 endWith command =
     (\procId msgTagger _ ->
         Task.succeed ()
@@ -106,33 +116,33 @@ endWith command =
                         |> msgTagger
                 )
     )
-        |> Procedure
+        |> Proc
 
 
-provide : a -> Procedure e a msg
-provide =
-    Task.succeed >> fromTask
+pure : a -> Proc e a msg
+pure =
+    Task.succeed >> task
 
 
-fromTask : Task e a -> Procedure e a msg
-fromTask task =
+task : Task e a -> Proc e a msg
+task tsk =
     (\_ _ resultTagger ->
-        Task.attempt resultTagger task
+        Task.attempt resultTagger tsk
     )
-        |> Procedure
+        |> Proc
 
 
-break : e -> Procedure e a msg
-break =
-    Task.fail >> fromTask
+err : e -> Proc e a msg
+err =
+    Task.fail >> task
 
 
-catch : (e -> Procedure f a msg) -> Procedure e a msg -> Procedure f a msg
+catch : (e -> Proc f a msg) -> Proc e a msg -> Proc f a msg
 catch generator procedure =
     (\aResult ->
         case aResult of
             Ok aData ->
-                provide aData
+                pure aData
 
             Err eData ->
                 generator eData
@@ -140,7 +150,7 @@ catch generator procedure =
         |> next procedure
 
 
-andThen : (a -> Procedure e b msg) -> Procedure e a msg -> Procedure e b msg
+andThen : (a -> Proc e b msg) -> Proc e a msg -> Proc e b msg
 andThen generator procedure =
     (\aResult ->
         case aResult of
@@ -148,13 +158,13 @@ andThen generator procedure =
                 generator aData
 
             Err eData ->
-                break eData
+                err eData
     )
         |> next procedure
 
 
-collect : List (Procedure e a msg) -> Procedure e (List a) msg
-collect procedures =
+sequence : List (Proc e a msg) -> Proc e (List a) msg
+sequence procedures =
     case procedures of
         [] ->
             emptyProcedure
@@ -163,32 +173,32 @@ collect procedures =
             List.foldl (addToList >> andThen) (addToList procedure []) remainingProcedures
 
 
-addToList : Procedure e a msg -> List a -> Procedure e (List a) msg
+addToList : Proc e a msg -> List a -> Proc e (List a) msg
 addToList procedure collector =
     (\aResult ->
         case aResult of
             Ok aData ->
                 [ aData ]
                     |> List.append collector
-                    |> provide
+                    |> pure
 
             Err eData ->
-                break eData
+                err eData
     )
         |> next procedure
 
 
-emptyProcedure : Procedure e a msg
+emptyProcedure : Proc e a msg
 emptyProcedure =
-    (\_ _ _ -> Cmd.none) |> Procedure
+    (\_ _ _ -> Cmd.none) |> Proc
 
 
-map : (a -> b) -> Procedure e a msg -> Procedure e b msg
+map : (a -> b) -> Proc e a msg -> Proc e b msg
 map mapper =
-    andThen (mapper >> provide)
+    andThen (mapper >> pure)
 
 
-map2 : (a -> b -> c) -> Procedure e a msg -> Procedure e b msg -> Procedure e c msg
+map2 : (a -> b -> c) -> Proc e a msg -> Proc e b msg -> Proc e c msg
 map2 mapper procedureA procedureB =
     procedureA
         |> andThen
@@ -198,7 +208,7 @@ map2 mapper procedureA procedureB =
             )
 
 
-map3 : (a -> b -> c -> d) -> Procedure e a msg -> Procedure e b msg -> Procedure e c msg -> Procedure e d msg
+map3 : (a -> b -> c -> d) -> Proc e a msg -> Proc e b msg -> Proc e c msg -> Proc e d msg
 map3 mapper procedureA procedureB procedureC =
     procedureA
         |> andThen
@@ -207,26 +217,26 @@ map3 mapper procedureA procedureB procedureC =
             )
 
 
-mapError : (e -> f) -> Procedure e a msg -> Procedure f a msg
+mapError : (e -> f) -> Proc e a msg -> Proc f a msg
 mapError mapper procedure =
     (\aResult ->
         case aResult of
             Ok aData ->
-                provide aData
+                pure aData
 
             Err eData ->
                 mapper eData
-                    |> break
+                    |> err
     )
         |> next procedure
 
 
-next : Procedure e a msg -> (Result e a -> Procedure f b msg) -> Procedure f b msg
-next (Procedure procedure) resultMapper =
+next : Proc e a msg -> (Result e a -> Proc f b msg) -> Proc f b msg
+next (Proc procedure) resultMapper =
     (\procId msgTagger tagger ->
         (\aResult ->
             let
-                (Procedure nextProcedure) =
+                (Proc nextProcedure) =
                     resultMapper aResult
             in
             nextProcedure procId msgTagger tagger
@@ -234,16 +244,16 @@ next (Procedure procedure) resultMapper =
         )
             |> procedure procId msgTagger
     )
-        |> Procedure
+        |> Proc
 
 
-try : (Msg msg -> msg) -> (Result e a -> msg) -> Procedure e a msg -> Cmd msg
-try msgTagger tagger (Procedure procedure) =
+try : (Msg msg -> msg) -> (Result e a -> msg) -> Proc e a msg -> Cmd msg
+try msgTagger tagger (Proc procedure) =
     Task.succeed (\procId -> procedure procId msgTagger tagger)
         |> Task.perform (Initiate >> msgTagger)
 
 
-run : (Msg msg -> msg) -> (a -> msg) -> Procedure Never a msg -> Cmd msg
+run : (Msg msg -> msg) -> (a -> msg) -> Proc Never a msg -> Cmd msg
 run msgTagger tagger =
     try msgTagger
         (\result ->
@@ -301,17 +311,17 @@ filter predicate (Channel channel) =
         { channel | shouldAccept = predicate }
 
 
-acceptOne : Channel a msg -> Procedure e a msg
+acceptOne : Channel a msg -> Proc e a msg
 acceptOne =
     always True |> acceptUntil
 
 
-accept : Channel a msg -> Procedure e a msg
+accept : Channel a msg -> Proc e a msg
 accept =
     always False |> acceptUntil
 
 
-acceptUntil : (a -> Bool) -> Channel a msg -> Procedure e a msg
+acceptUntil : (a -> Bool) -> Channel a msg -> Proc e a msg
 acceptUntil shouldUnsubscribe (Channel channel) =
     (\procId msgTagger resultTagger ->
         let
@@ -342,7 +352,7 @@ acceptUntil shouldUnsubscribe (Channel channel) =
         Task.succeed subGenerator
             |> Task.perform (Subscribe procId requestCommandMsg >> msgTagger)
     )
-        |> Procedure
+        |> Proc
 
 
 channelKey : Int -> String
@@ -362,16 +372,6 @@ defaultPredicate _ _ =
 
 
 -- Program
-
-
-type Model msg
-    = Model (Registry msg)
-
-
-type alias Registry msg =
-    { nextId : Int
-    , channels : Dict Int (Sub msg)
-    }
 
 
 init : Model msg
