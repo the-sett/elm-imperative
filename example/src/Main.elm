@@ -1,11 +1,24 @@
-module Main exposing (..)
+port module Main exposing (..)
 
 import Proc
 import Task
 
 
+port request : String -> Cmd msg
+
+
+port response : (String -> msg) -> Sub msg
+
+
 type alias Example =
     { messages : List String }
+
+
+roundTrip : String -> Proc.Proc s x String
+roundTrip val =
+    Proc.open (\_ -> request val)
+        |> Proc.connect response
+        |> Proc.acceptOne
 
 
 example : Proc.Proc Example String ()
@@ -18,6 +31,8 @@ example =
         |> Proc.andThen (\_ -> Proc.pure "success2")
         |> Proc.andThen push
         |> Proc.andThen (\_ -> Proc.task (Task.succeed "task"))
+        |> Proc.andThen push
+        |> Proc.andThen (\_ -> roundTrip "task port")
         |> Proc.andThen push
         |> Proc.andThen (\_ -> Proc.task (Task.fail "failed task"))
         |> Proc.andThen push

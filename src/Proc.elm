@@ -47,7 +47,7 @@ state monad. This helps you do stateful programming with IO and error handling.
 @docs sequence
 
 
-# Work with subscriptions
+# Work with subscriptions or command together
 
 @docs Channel, ChannelRequest
 @docs join, open, connect, filter
@@ -248,7 +248,7 @@ task t =
 
 {-| Turns a Cmd into a `Proc`, allowing an IO operation to be run that never produces errors.
 -}
-do : Cmd a -> Proc s Never a
+do : Cmd a -> Proc s x a
 do command =
     (\pid s ->
         ( s, Cmd.map pure command |> PExecute pid )
