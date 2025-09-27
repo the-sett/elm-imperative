@@ -63,7 +63,7 @@ type alias PRegistry s x a =
 {-| Proc combines `Result`, `Task` and the state monad together.
 -}
 type Proc s x a
-    = State (s -> ( s, T s x a ))
+    = Proc (Int -> s -> ( s, T s x a ))
 
 
 type T s x a
@@ -76,19 +76,17 @@ type T s x a
     | PExecute Int (Cmd (Proc s x a))
 
 
-type Msg
-    = Initiate (Int -> Cmd Msg)
-    | Execute Int (Cmd Msg)
-    | Subscribe Int (Int -> Msg) (Int -> Sub Msg)
-    | Unsubscribe Int Int Msg
-    | Continue
 
-
-type Procedure e a
-    = Procedure (Int -> (Result e a -> Msg) -> Cmd Msg)
-
-
-
+--type Msg
+--    = Initiate (Int -> Cmd Msg)
+--    | Execute Int (Cmd Msg)
+--    | Subscribe Int (Int -> Msg) (Int -> Sub Msg)
+--    | Unsubscribe Int Int Msg
+--    | Continue
+--
+--
+--type Proc e a
+--    = Procedure (Int -> (Result e a -> Msg) -> Cmd Msg)
 -- Imperative programs
 
 
@@ -123,8 +121,8 @@ subscriptions registry =
 
 
 eval : Proc s x a -> PRegistry s x a -> ( PRegistry s x a, Cmd (Proc s x a) )
-eval (State io) reg =
-    case io reg.state of
+eval (Proc io) reg =
+    case io reg.nextId reg.state of
         ( nextS, PTask t ) ->
             ( { reg | state = nextS }
             , Task.attempt
@@ -202,28 +200,23 @@ sendMessage msg =
 
 
 -- Not sure yet what to do with these:
-
-
-try : (Result e a -> Msg) -> Procedure e a -> Cmd Msg
-try tagger (Procedure procedure) =
-    Task.succeed (\procId -> procedure procId tagger)
-        |> Task.perform Initiate
-
-
-run : (a -> Msg) -> Procedure Never a -> Cmd Msg
-run tagger =
-    try
-        (\res ->
-            case res of
-                Ok data ->
-                    tagger data
-
-                Err e ->
-                    never e
-        )
-
-
-
+--try : (Result e a -> Msg) -> Procedure e a -> Cmd Msg
+--try tagger (Procedure procedure) =
+--    Task.succeed (\procId -> procedure procId tagger)
+--        |> Task.perform Initiate
+--
+--
+--run : (a -> Msg) -> Procedure Never a -> Cmd Msg
+--run tagger =
+--    try
+--        (\res ->
+--            case res of
+--                Ok data ->
+--                    tagger data
+--
+--                Err e ->
+--                    never e
+--        )
 -- Constructors
 
 
@@ -231,8 +224,8 @@ run tagger =
 -}
 pure : a -> Proc s x a
 pure val =
-    (\s -> ( s, POk val ))
-        |> State
+    (\_ s -> ( s, POk val ))
+        |> Proc
 
 
 {-| Builds an error as an `Proc`, allowing errors in imperative programs. This is
@@ -240,8 +233,8 @@ like the `throw` operation.
 -}
 err : x -> Proc s x a
 err e =
-    (\s -> ( s, PErr e ))
-        |> State
+    (\_ s -> ( s, PErr e ))
+        |> Proc
 
 
 {-| Turns an Elm task into an `Proc`, allowing some IO operation to be run, and that
@@ -249,8 +242,8 @@ may produce errors.
 -}
 task : Task.Task x a -> Proc s x a
 task t =
-    (\s -> ( s, t |> Task.map pure |> PTask ))
-        |> State
+    (\_ s -> ( s, t |> Task.map pure |> PTask ))
+        |> Proc
 
 
 {-| Convert `Result` into an `Proc`.
@@ -270,14 +263,14 @@ value for the program.
 -}
 advance : (s -> ( s, a )) -> Proc s x a
 advance fn =
-    (\s ->
+    (\pid s ->
         let
             ( nextS, a ) =
                 fn s
         in
         ( nextS, POk a )
     )
-        |> State
+        |> Proc
 
 
 
@@ -291,9 +284,9 @@ depends on the results of the one before.
 
 -}
 andThen : (a -> Proc s x b) -> Proc s x a -> Proc s x b
-andThen mf (State io) =
-    (\s ->
-        case io s of
+andThen mf (Proc io) =
+    (\pid s ->
+        case io pid s of
             ( nextS, PTask t ) ->
                 ( nextS
                 , Task.andThen (\inner -> Task.succeed (andThen mf inner)) t
@@ -302,10 +295,10 @@ andThen mf (State io) =
 
             ( nextS, POk x ) ->
                 let
-                    (State stateFn) =
+                    (Proc stateFn) =
                         mf x
                 in
-                stateFn nextS
+                stateFn pid nextS
 
             ( nextS, PErr e ) ->
                 ( nextS
@@ -339,7 +332,7 @@ andThen mf (State io) =
                 , Cmd.map (\p -> andThen mf p) command |> PExecute procId
                 )
     )
-        |> State
+        |> Proc
 
 
 {-| Apply the function that is inside `Proc` to a value that is inside `Proc`. Return the result
@@ -359,9 +352,9 @@ recover back onto the success track.
 
 -}
 onError : (x -> Proc s y a) -> Proc s x a -> Proc s y a
-onError ef (State io) =
-    (\s ->
-        case io s of
+onError ef (Proc io) =
+    (\pid s ->
+        case io pid s of
             ( nextS, PTask t ) ->
                 ( nextS
                 , Task.onError
@@ -375,10 +368,10 @@ onError ef (State io) =
 
             ( nextS, PErr e ) ->
                 let
-                    (State stateFn) =
+                    (Proc stateFn) =
                         ef e
                 in
-                stateFn nextS
+                stateFn pid nextS
 
             ( nextS, PInitiate generator ) ->
                 ( nextS
@@ -407,13 +400,13 @@ onError ef (State io) =
                 , Cmd.map (\p -> onError ef p) command |> PExecute procId
                 )
     )
-        |> State
+        |> Proc
 
 
 mapBoth : (a -> b) -> (x -> y) -> Proc s x a -> Proc s y b
-mapBoth mf ef (State io) =
-    (\s ->
-        case io s of
+mapBoth mf ef (Proc io) =
+    (\pid s ->
+        case io pid s of
             ( nextS, PTask t ) ->
                 ( nextS
                 , t
@@ -459,7 +452,7 @@ mapBoth mf ef (State io) =
                 , PExecute procId (Cmd.map (mapBoth mf ef) command)
                 )
     )
-        |> State
+        |> Proc
 
 
 mapError : (x -> y) -> Proc s x a -> Proc s y a
@@ -571,21 +564,21 @@ map6 f p1 p2 p3 p4 p5 p6 =
 -}
 get : Proc s x s
 get =
-    State (\s -> ( s, POk s ))
+    Proc (\_ s -> ( s, POk s ))
 
 
 {-| An `Proc` that takes the given current state.
 -}
 put : s -> Proc s x ()
 put s =
-    State (\_ -> ( s, POk () ))
+    Proc (\_ _ -> ( s, POk () ))
 
 
 {-| Applies a function to the current state to produce an `Proc` with a new current state.
 -}
 modify : (s -> s) -> Proc s x ()
 modify fn =
-    State (\s -> ( fn s, POk () ))
+    Proc (\_ s -> ( fn s, POk () ))
 
 
 
@@ -608,50 +601,57 @@ sequence ios =
 -- Procedure
 
 
-fetch : ((a -> Msg) -> Cmd Msg) -> Procedure e a
+fetch : ((a -> msg) -> Cmd msg) -> Proc s x a
 fetch generator =
-    (\_ tagger ->
-        (Ok >> tagger) |> generator
-    )
-        |> Procedure
+    --(\_ tagger ->
+    --    (Ok >> tagger) |> generator
+    --)
+    --    |> Procedure
+    Debug.todo ""
 
 
-fetchResult : ((Result e a -> Msg) -> Cmd Msg) -> Procedure e a
+fetchResult : ((Result x a -> msg) -> Cmd msg) -> Proc s x a
 fetchResult generator =
-    (\_ tagger ->
-        generator tagger
-    )
-        |> Procedure
+    --(\_ tagger ->
+    --    generator tagger
+    --)
+    --    |> Procedure
+    Debug.todo ""
 
 
-do : Cmd Msg -> Procedure Never ()
+do : Cmd msg -> Proc s Never ()
 do command =
-    (\procId resultTagger ->
-        Task.succeed ()
-            |> Task.perform
-                (\_ ->
-                    let
-                        nextCommand =
-                            Task.succeed ()
-                                |> Task.perform (Ok >> resultTagger)
-                    in
-                    Cmd.batch [ command, nextCommand ]
-                        |> Execute procId
-                )
+    --(\procId resultTagger ->
+    --    Task.succeed ()
+    --        |> Task.perform
+    --            (\_ ->
+    --                let
+    --                    nextCommand =
+    --                        Task.succeed ()
+    --                            |> Task.perform (Ok >> resultTagger)
+    --                in
+    --                Cmd.batch [ command, nextCommand ]
+    --                    |> Execute procId
+    --            )
+    --)
+    --    |> Procedure
+    (\s ->
+        Debug.todo ""
     )
-        |> Procedure
+        |> Proc
 
 
-endWith : Cmd Msg -> Procedure Never Never
+endWith : Cmd msg -> Proc s Never Never
 endWith command =
-    (\procId _ ->
-        Task.succeed ()
-            |> Task.perform
-                (\_ ->
-                    Execute procId command
-                )
-    )
-        |> Procedure
+    --(\procId _ ->
+    --    Task.succeed ()
+    --        |> Task.perform
+    --            (\_ ->
+    --                Execute procId command
+    --            )
+    --)
+    --    |> Procedure
+    Debug.todo ""
 
 
 
@@ -741,7 +741,7 @@ acceptUntil shouldUnsubscribe (Channel channel) =
         --    |> Task.perform (PSubscribe procId requestCommandMsg)
         Debug.todo ""
     )
-        |> State
+        |> Proc
 
 
 channelKey : Int -> String
@@ -757,120 +757,3 @@ defaultRequest _ =
 defaultPredicate : String -> a -> Bool
 defaultPredicate _ _ =
     True
-
-
-
---provide : a -> Procedure e a
---provide =
---    Task.succeed >> fromTask
---
---
---fromTask : Task e a -> Procedure e a
---fromTask t =
---    (\_ resultTagger ->
---        Task.attempt resultTagger t
---    )
---        |> Procedure
---
---
---break : e -> Procedure e a
---break =
---    Task.fail >> fromTask
---
---
---catch : (e -> Procedure f a) -> Procedure e a -> Procedure f a
---catch generator procedure =
---    (\aResult ->
---        case aResult of
---            Ok aData ->
---                provide aData
---
---            Err eData ->
---                generator eData
---    )
---        |> next procedure
---andThen : (a -> Procedure e b) -> Procedure e a -> Procedure e b
---andThen generator procedure =
---    (\aResult ->
---        case aResult of
---            Ok aData ->
---                generator aData
---
---            Err eData ->
---                break eData
---    )
---        |> next procedure
---collect : List (Procedure e a) -> Procedure e (List a)
---collect procedures =
---    case procedures of
---        [] ->
---            emptyProcedure
---
---        procedure :: remainingProcedures ->
---            List.foldl (addToList >> andThen) (addToList procedure []) remainingProcedures
---addToList : Procedure e a -> List a -> Procedure e (List a)
---addToList procedure collector =
---    (\aResult ->
---        case aResult of
---            Ok aData ->
---                [ aData ]
---                    |> List.append collector
---                    |> provide
---
---            Err eData ->
---                break eData
---    )
---        |> next procedure
---emptyProcedure : Procedure e a
---emptyProcedure =
---    (\_ _ -> Cmd.none) |> Procedure
---map : (a -> b) -> Procedure e a -> Procedure e b
---map mapper =
---    andThen (mapper >> provide)
---
---
---map2 : (a -> b -> c) -> Procedure e a -> Procedure e b -> Procedure e c
---map2 mapper procedureA procedureB =
---    procedureA
---        |> andThen
---            (\aData ->
---                procedureB
---                    |> map (mapper aData)
---            )
---
---
---map3 : (a -> b -> c -> d) -> Procedure e a -> Procedure e b -> Procedure e c -> Procedure e d
---map3 mapper procedureA procedureB procedureC =
---    procedureA
---        |> andThen
---            (\aData ->
---                map2 (mapper aData) procedureB procedureC
---            )
---
---
---mapError : (e -> f) -> Procedure e a -> Procedure f a
---mapError mapper procedure =
---    (\aResult ->
---        case aResult of
---            Ok aData ->
---                provide aData
---
---            Err eData ->
---                mapper eData
---                    |> break
---    )
---        |> next procedure
---next : Procedure e a -> (Result e a -> Procedure f b) -> Procedure f b
---next (Procedure procedure) resultMapper =
---    (\procId tagger ->
---        (\aResult ->
---            let
---                (Procedure nextProcedure) =
---                    resultMapper aResult
---            in
---            nextProcedure procId tagger
---                |> Execute procId
---        )
---            |> procedure procId
---    )
---        |> Procedure
