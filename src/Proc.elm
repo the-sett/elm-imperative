@@ -246,6 +246,16 @@ task t =
         |> Proc
 
 
+{-| Turns a Cmd into a `Proc`, allowing an IO operation to be run that never produces errors.
+-}
+do : Cmd a -> Proc s Never a
+do command =
+    (\pid s ->
+        ( s, Cmd.map pure command |> PExecute pid )
+    )
+        |> Proc
+
+
 {-| Convert `Result` into an `Proc`.
 -}
 result : Result x a -> Proc s x a
@@ -598,63 +608,6 @@ sequence ios =
 
 
 
--- Procedure
-
-
-fetch : ((a -> msg) -> Cmd msg) -> Proc s x a
-fetch generator =
-    --(\_ tagger ->
-    --    (Ok >> tagger) |> generator
-    --)
-    --    |> Procedure
-    Debug.todo ""
-
-
-fetchResult : ((Result x a -> msg) -> Cmd msg) -> Proc s x a
-fetchResult generator =
-    --(\_ tagger ->
-    --    generator tagger
-    --)
-    --    |> Procedure
-    Debug.todo ""
-
-
-do : Cmd msg -> Proc s Never ()
-do command =
-    --(\procId resultTagger ->
-    --    Task.succeed ()
-    --        |> Task.perform
-    --            (\_ ->
-    --                let
-    --                    nextCommand =
-    --                        Task.succeed ()
-    --                            |> Task.perform (Ok >> resultTagger)
-    --                in
-    --                Cmd.batch [ command, nextCommand ]
-    --                    |> Execute procId
-    --            )
-    --)
-    --    |> Procedure
-    (\s ->
-        Debug.todo ""
-    )
-        |> Proc
-
-
-endWith : Cmd msg -> Proc s Never Never
-endWith command =
-    --(\procId _ ->
-    --    Task.succeed ()
-    --        |> Task.perform
-    --            (\_ ->
-    --                Execute procId command
-    --            )
-    --)
-    --    |> Procedure
-    Debug.todo ""
-
-
-
 -- Channel
 
 
@@ -711,7 +664,7 @@ accept =
 
 acceptUntil : (a -> Bool) -> Channel s x a -> Proc s x a
 acceptUntil shouldUnsubscribe (Channel channel) =
-    (\s ->
+    (\pi s ->
         --let
         --    requestCommandMsg channelId =
         --        channel.request (channelKey channelId)
