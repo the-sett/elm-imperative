@@ -614,7 +614,7 @@ sequence ios =
 type Channel s x a
     = Channel
         { request : String -> Cmd (Proc s x a)
-        , subscription : a -> Proc s x a -> Sub (Proc s x a)
+        , subscription : (a -> Proc s x a) -> Sub (Proc s x a)
         , shouldAccept : String -> a -> Bool
         }
 
@@ -628,7 +628,7 @@ open =
     ChannelRequest
 
 
-connect : (a -> Proc s x a -> Sub (Proc s x a)) -> ChannelRequest s x a -> Channel s x a
+connect : ((a -> Proc s x a) -> Sub (Proc s x a)) -> ChannelRequest s x a -> Channel s x a
 connect generator (ChannelRequest requestGenerator) =
     Channel
         { request = requestGenerator
@@ -637,7 +637,7 @@ connect generator (ChannelRequest requestGenerator) =
         }
 
 
-join : (a -> Proc s x a -> Sub (Proc s x a)) -> Channel s x a
+join : ((a -> Proc s x a) -> Sub (Proc s x a)) -> Channel s x a
 join generator =
     Channel
         { request = defaultRequest
@@ -664,35 +664,50 @@ accept =
 
 acceptUntil : (a -> Bool) -> Channel s x a -> Proc s x a
 acceptUntil shouldUnsubscribe (Channel channel) =
-    (\pi s ->
-        --let
-        --    requestCommandMsg channelId =
-        --        channel.request (channelKey channelId)
-        --            |> PExecute procId
-        --
-        --    subGenerator channelId =
-        --        (\aData ->
-        --            if channel.shouldAccept (channelKey channelId) aData then
-        --                generateMsg channelId aData
-        --
-        --            else
-        --                Continue
-        --        )
-        --            |> channel.subscription
-        --
-        --    generateMsg channelId aData =
-        --        if shouldUnsubscribe aData then
-        --            Ok aData
-        --                |> resultTagger
-        --                |> PUnsubscribe procId channelId
-        --
-        --        else
-        --            Ok aData
-        --                |> resultTagger
-        --in
-        --Task.succeed subGenerator
-        --    |> Task.perform (PSubscribe procId requestCommandMsg)
-        Debug.todo ""
+    (\pid s ->
+        let
+            requestCommandMsg : Int -> Proc s x a
+            requestCommandMsg channelId =
+                (\_ innerS ->
+                    ( innerS
+                    , channel.request (channelKey channelId)
+                        |> PExecute pid
+                    )
+                )
+                    |> Proc
+
+            subGenerator : Int -> Sub (Proc s x a)
+            subGenerator channelId =
+                (\aData ->
+                    if channel.shouldAccept (channelKey channelId) aData then
+                        (\_ innerS ->
+                            ( innerS
+                            , generateMsg channelId aData
+                            )
+                        )
+                            |> Proc
+
+                    else
+                        (\_ innerS ->
+                            ( innerS
+                            , POk aData
+                            )
+                        )
+                            |> Proc
+                )
+                    |> channel.subscription
+
+            generateMsg : Int -> a -> T s x a
+            generateMsg channelId aData =
+                if shouldUnsubscribe aData then
+                    PUnsubscribe pid channelId (pure aData)
+
+                else
+                    POk aData
+        in
+        ( s
+        , PSubscribe pid requestCommandMsg subGenerator
+        )
     )
         |> Proc
 
