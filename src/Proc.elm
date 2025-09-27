@@ -1,6 +1,7 @@
 module Proc exposing
     ( Proc
     , Program, program
+    , Model, init, subscriptions, update
     , pure, err, result, task, do, advance
     , andThen, andMap, onError, map
     , map2, map3, map4, map5, map6
@@ -20,6 +21,11 @@ state monad. This helps you do stateful programming with IO and error handling.
 # Imperative programs
 
 @docs Program, program
+
+
+# TEA structure for hooking this into larger programs
+
+@docs Model, init, subscriptions, update
 
 
 # Constructors
@@ -63,11 +69,14 @@ import Task exposing (Task)
 -- The imperative structure
 
 
-type alias PRegistry s x a =
-    { nextId : Int
-    , channels : Dict Int (Sub (Proc s x a))
-    , state : s
-    }
+{-| Internal state that is needed to evaluate a Proc.
+-}
+type Model s x a
+    = Registry
+        { nextId : Int
+        , channels : Dict Int (Sub (Proc s x a))
+        , state : s
+        }
 
 
 {-| Proc combines `Result`, `Task` and the state monad together.
@@ -92,39 +101,58 @@ type T s x a
 
 {-| Imperative Elm programs.
 -}
-type alias Program flags model err res =
-    Platform.Program flags (PRegistry model err res) (Proc model err res)
+type alias Program flags s x a =
+    Platform.Program flags (Model s x a) (Proc s x a)
 
 
 {-| Builds an imperative program from flags, an initial model and an imperative program structure.
 -}
-program : flags -> (flags -> model) -> Proc model err res -> Program flags model err res
+program : flags -> (flags -> s) -> Proc s x a -> Program flags s x a
 program flags initFn io =
     Platform.worker
-        { init = \_ -> eval io (initFn flags |> initReg)
-        , update = eval
+        { init = \_ -> update io (initFn flags |> init)
+        , update = update
         , subscriptions = subscriptions
         }
 
 
-initReg s =
+{-| Create the Model from some starting state.
+-}
+init : s -> Model s x a
+init s =
     { nextId = 0
     , channels = Dict.empty
     , state = s
     }
+        |> Registry
 
 
-subscriptions : PRegistry s x a -> Sub (Proc s x a)
-subscriptions registry =
-    Dict.values registry.channels
+{-| Provides the subscriptions needed to evaluate against the Model.
+-}
+subscriptions : Model s x a -> Sub (Proc s x a)
+subscriptions (Registry reg) =
+    Dict.values reg.channels
         |> Sub.batch
 
 
-eval : Proc s x a -> PRegistry s x a -> ( PRegistry s x a, Cmd (Proc s x a) )
-eval (Proc io) reg =
+{-| Evalulates a Proc against a Model, producing a new model and some Cmds until the Proc is fully evaluated
+and terminates.
+-}
+update : Proc s x a -> Model s x a -> ( Model s x a, Cmd (Proc s x a) )
+update (Proc io) (Registry reg) =
+    let
+        addChannel subGenerator innerReg =
+            { innerReg
+                | nextId = innerReg.nextId + 1
+                , channels = Dict.insert innerReg.nextId (subGenerator innerReg.nextId) innerReg.channels
+            }
+
+        deleteChannel channelId innerReg =
+            { innerReg | channels = Dict.remove channelId innerReg.channels }
+    in
     case io reg.nextId reg.state of
         ( nextS, PTask t ) ->
-            ( { reg | state = nextS }
+            ( { reg | state = nextS } |> Registry
             , Task.attempt
                 (\r ->
                     case r of
@@ -138,12 +166,12 @@ eval (Proc io) reg =
             )
 
         ( nextS, POk x ) ->
-            ( { reg | state = nextS }
+            ( { reg | state = nextS } |> Registry
             , Cmd.none
             )
 
         ( nextS, PErr e ) ->
-            ( { reg | state = nextS }
+            ( { reg | state = nextS } |> Registry
             , Cmd.none
             )
 
@@ -152,6 +180,7 @@ eval (Proc io) reg =
                 | nextId = reg.nextId + 1
                 , state = nextS
               }
+                |> Registry
             , generator reg.nextId
             )
 
@@ -160,7 +189,7 @@ eval (Proc io) reg =
                 nextReg =
                     addChannel subGenerator reg
             in
-            ( { nextReg | state = nextS }
+            ( { nextReg | state = nextS } |> Registry
             , messageGenerator reg.nextId
                 |> sendMessage
             )
@@ -170,27 +199,14 @@ eval (Proc io) reg =
                 nextReg =
                     deleteChannel channelId reg
             in
-            ( { nextReg | state = nextS }
+            ( { nextReg | state = nextS } |> Registry
             , sendMessage nextMessage
             )
 
         ( nextS, PExecute _ cmd ) ->
-            ( { reg | state = nextS }
+            ( { reg | state = nextS } |> Registry
             , cmd
             )
-
-
-addChannel : (Int -> Sub (Proc s x a)) -> PRegistry s x a -> PRegistry s x a
-addChannel subGenerator reg =
-    { reg
-        | nextId = reg.nextId + 1
-        , channels = Dict.insert reg.nextId (subGenerator reg.nextId) reg.channels
-    }
-
-
-deleteChannel : Int -> PRegistry s x a -> PRegistry s x a
-deleteChannel channelId reg =
-    { reg | channels = Dict.remove channelId reg.channels }
 
 
 sendMessage : msg -> Cmd msg
