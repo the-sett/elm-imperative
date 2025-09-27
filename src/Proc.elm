@@ -45,10 +45,6 @@ import Task exposing (Task)
 -- Internal
 
 
-type Model msg
-    = Model (Registry msg)
-
-
 type alias Registry msg =
     { nextId : Int
     , channels : Dict Int (Sub msg)
@@ -374,22 +370,15 @@ defaultPredicate _ _ =
 -- Program
 
 
-init : Model msg
+init : Registry msg
 init =
     { nextId = 0
     , channels = Dict.empty
     }
-        |> Model
 
 
-update : Msg msg -> Model msg -> ( Model msg, Cmd msg )
-update msg (Model registry) =
-    updateProcedures msg registry
-        |> Tuple.mapFirst Model
-
-
-updateProcedures : Msg msg -> Registry msg -> ( Registry msg, Cmd msg )
-updateProcedures msg registry =
+update : Msg msg -> Registry msg -> ( Registry msg, Cmd msg )
+update msg registry =
     case msg of
         Initiate generator ->
             ( { registry | nextId = registry.nextId + 1 }
@@ -435,7 +424,7 @@ sendMessage msg =
         |> Task.perform (always msg)
 
 
-subscriptions : Model msg -> Sub msg
-subscriptions (Model registry) =
+subscriptions : Registry msg -> Sub msg
+subscriptions registry =
     Dict.values registry.channels
         |> Sub.batch
