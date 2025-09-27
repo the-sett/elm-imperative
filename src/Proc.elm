@@ -63,17 +63,16 @@ type alias PRegistry s x a =
 {-| Proc combines `Result`, `Task` and the state monad together.
 -}
 type Proc s x a
-    = State (s -> ( s, T s x a ))
+    = State (s -> ( s, T ))
+    | POk (s -> ( s, a ))
+    | PErr (s -> ( s, x ))
 
 
-type T s x a
-    = PTask (Task.Task x (Proc s x a))
-    | POk a
-    | PErr x
-    | PInitiate (Int -> Cmd (Proc s x a))
-    | PSubscribe Int (Int -> Proc s x a) (Int -> Sub (Proc s x a))
-    | PUnsubscribe Int Int (Proc s x a)
-    | PExecute Int (Cmd (Proc s x a))
+type T
+    = PInitiate (Int -> Cmd T)
+    | PSubscribe Int (Int -> T) (Int -> Sub T)
+    | PUnsubscribe Int Int T
+    | PExecute Int (Cmd T)
 
 
 type Msg
@@ -125,20 +124,6 @@ subscriptions registry =
 eval : Proc s x a -> PRegistry s x a -> ( PRegistry s x a, Cmd (Proc s x a) )
 eval (State io) reg =
     case io reg.state of
-        ( nextS, PTask t ) ->
-            ( { reg | state = nextS }
-            , Task.attempt
-                (\r ->
-                    case r of
-                        Ok x ->
-                            x
-
-                        Err e ->
-                            err e
-                )
-                t
-            )
-
         ( nextS, POk x ) ->
             ( { reg | state = nextS }
             , Cmd.none
@@ -231,8 +216,8 @@ run tagger =
 -}
 pure : a -> Proc s x a
 pure val =
-    (\s -> ( s, POk val ))
-        |> State
+    (\s -> ( s, val ))
+        |> POk
 
 
 {-| Builds an error as an `Proc`, allowing errors in imperative programs. This is
@@ -240,8 +225,8 @@ like the `throw` operation.
 -}
 err : x -> Proc s x a
 err e =
-    (\s -> ( s, PErr e ))
-        |> State
+    (\s -> ( s, e ))
+        |> PErr
 
 
 {-| Turns an Elm task into an `Proc`, allowing some IO operation to be run, and that
@@ -249,8 +234,9 @@ may produce errors.
 -}
 task : Task.Task x a -> Proc s x a
 task t =
-    (\s -> ( s, t |> Task.map pure |> PTask ))
-        |> State
+    --(\s -> ( s, t |> Task.map pure |> PTask ))
+    --    |> State
+    Debug.todo ""
 
 
 {-| Convert `Result` into an `Proc`.
@@ -294,12 +280,6 @@ andThen : (a -> Proc s x b) -> Proc s x a -> Proc s x b
 andThen mf (State io) =
     (\s ->
         case io s of
-            ( nextS, PTask t ) ->
-                ( nextS
-                , Task.andThen (\inner -> Task.succeed (andThen mf inner)) t
-                    |> PTask
-                )
-
             ( nextS, POk x ) ->
                 let
                     (State stateFn) =
@@ -359,69 +339,55 @@ recover back onto the success track.
 
 -}
 onError : (x -> Proc s y a) -> Proc s x a -> Proc s y a
-onError ef (State io) =
-    (\s ->
-        case io s of
-            ( nextS, PTask t ) ->
-                ( nextS
-                , Task.onError
-                    (\e -> ef e |> Task.succeed)
-                    (t |> Task.map (onError ef))
-                    |> PTask
-                )
+onError ef proc =
+    case proc of
+        State io ->
+            (\s ->
+                case io s of
+                    ( nextS, PInitiate generator ) ->
+                        ( nextS
+                        , generator >> Cmd.map (\p -> onError ef p) |> PInitiate
+                        )
 
-            ( nextS, POk x ) ->
-                ( nextS, POk x )
+                    ( nextS, PSubscribe procId generator subGenerator ) ->
+                        let
+                            mappedGen =
+                                generator >> onError ef
 
-            ( nextS, PErr e ) ->
-                let
-                    (State stateFn) =
-                        ef e
-                in
-                stateFn nextS
+                            mappedSubGen =
+                                subGenerator >> Sub.map (onError ef)
+                        in
+                        ( nextS
+                        , PSubscribe procId mappedGen mappedSubGen
+                        )
 
-            ( nextS, PInitiate generator ) ->
-                ( nextS
-                , generator >> Cmd.map (\p -> onError ef p) |> PInitiate
-                )
+                    ( nextS, PUnsubscribe procId channelId nextProc ) ->
+                        ( nextS
+                        , onError ef nextProc |> PUnsubscribe procId channelId
+                        )
 
-            ( nextS, PSubscribe procId generator subGenerator ) ->
-                let
-                    mappedGen =
-                        generator >> onError ef
+                    ( nextS, PExecute procId command ) ->
+                        ( nextS
+                        , Cmd.map (\p -> onError ef p) command |> PExecute procId
+                        )
+            )
+                |> State
 
-                    mappedSubGen =
-                        subGenerator >> Sub.map (onError ef)
-                in
-                ( nextS
-                , PSubscribe procId mappedGen mappedSubGen
-                )
+        ( nextS, POk io ) ->
+            ( nextS, POk io )
 
-            ( nextS, PUnsubscribe procId channelId nextProc ) ->
-                ( nextS
-                , onError ef nextProc |> PUnsubscribe procId channelId
-                )
-
-            ( nextS, PExecute procId command ) ->
-                ( nextS
-                , Cmd.map (\p -> onError ef p) command |> PExecute procId
-                )
-    )
-        |> State
+        ( nextS, PErr e ) ->
+            let
+                (State stateFn) =
+                    ef e
+            in
+            stateFn nextS
 
 
 mapBoth : (a -> b) -> (x -> y) -> Proc s x a -> Proc s y b
 mapBoth mf ef (State io) =
     (\s ->
         case io s of
-            ( nextS, PTask t ) ->
-                ( nextS
-                , t
-                    |> Task.andThen (\inner -> Task.succeed (mapBoth mf ef inner))
-                    |> Task.onError (\inner -> Task.fail (ef inner))
-                    |> PTask
-                )
-
             ( nextS, POk x ) ->
                 ( nextS
                 , mf x |> POk
@@ -571,21 +537,21 @@ map6 f p1 p2 p3 p4 p5 p6 =
 -}
 get : Proc s x s
 get =
-    State (\s -> ( s, POk s ))
+    POk (\s -> ( s, s ))
 
 
 {-| An `Proc` that takes the given current state.
 -}
 put : s -> Proc s x ()
 put s =
-    State (\_ -> ( s, POk () ))
+    POk (\_ -> ( s, () ))
 
 
 {-| Applies a function to the current state to produce an `Proc` with a new current state.
 -}
 modify : (s -> s) -> Proc s x ()
 modify fn =
-    State (\s -> ( fn s, POk () ))
+    POk (\s -> ( fn s, () ))
 
 
 
