@@ -1,12 +1,4 @@
-module Proc exposing
-    ( Proc
-    , Program, program
-    , pure, err, result, task, advance
-    , andThen, andMap, onError, map
-    , map2, map3, map4, map5, map6
-    , get, put, modify
-    , sequence
-    )
+module Proc exposing (..)
 
 {-| Proc provides a structure that combines 3 things; `Result`, `Procedure` and the
 state monad. This helps you do stateful programming with IO and error handling.
@@ -45,387 +37,405 @@ state monad. This helps you do stateful programming with IO and error handling.
 
 -}
 
-import Procedure
-import Task
+import Dict exposing (Dict)
+import Task exposing (Task)
 
 
 
--- The imperative structure
+-- Internal
 
 
-{-| Proc combines `Result`, `Task` and the state monad together.
--}
-type Proc s x a
-    = State (s -> ( s, T s x a ))
+type Msg msg
+    = Initiate (Int -> Cmd msg)
+    | Execute Int (Cmd msg)
+    | Subscribe Int (Int -> msg) (Int -> Sub msg)
+    | Unsubscribe Int Int msg
+    | Continue
 
 
-type T s x a
-    = PTask (Task.Task x (Proc s x a))
-    | PProc (Procedure.Procedure x (Proc s x a))
-    | POk a
-    | PErr x
+type Procedure e a msg
+    = Procedure (Int -> (Msg msg -> msg) -> (Result e a -> msg) -> Cmd msg)
 
 
 
--- Imperative programs
+-- Procedure
 
 
-{-| Imperative Elm programs.
--}
-type alias Program flags model err res =
-    Platform.Program flags model (Proc model err res)
+fetch : ((a -> msg) -> Cmd msg) -> Procedure e a msg
+fetch generator =
+    (\_ _ tagger ->
+        (Ok >> tagger) |> generator
+    )
+        |> Procedure
 
 
-{-| Builds an imperative program from flags, an initial model and an imperative program structure.
--}
-program : flags -> (flags -> model) -> Proc model err res -> Program flags model err res
-program flags initFn io =
-    Platform.worker
-        { init = \_ -> eval io (initFn flags)
-        , update = eval
-        , subscriptions = \_ -> Sub.none
+fetchResult : ((Result e a -> msg) -> Cmd msg) -> Procedure e a msg
+fetchResult generator =
+    (\_ _ tagger ->
+        generator tagger
+    )
+        |> Procedure
+
+
+do : Cmd msg -> Procedure Never () msg
+do command =
+    (\procId msgTagger resultTagger ->
+        Task.succeed ()
+            |> Task.perform
+                (\_ ->
+                    let
+                        nextCommand =
+                            Task.succeed ()
+                                |> Task.perform (Ok >> resultTagger)
+                    in
+                    Cmd.batch [ command, nextCommand ]
+                        |> Execute procId
+                        |> msgTagger
+                )
+    )
+        |> Procedure
+
+
+endWith : Cmd msg -> Procedure Never Never msg
+endWith command =
+    (\procId msgTagger _ ->
+        Task.succeed ()
+            |> Task.perform
+                (\_ ->
+                    Execute procId command
+                        |> msgTagger
+                )
+    )
+        |> Procedure
+
+
+provide : a -> Procedure e a msg
+provide =
+    Task.succeed >> fromTask
+
+
+fromTask : Task e a -> Procedure e a msg
+fromTask task =
+    (\_ _ resultTagger ->
+        Task.attempt resultTagger task
+    )
+        |> Procedure
+
+
+break : e -> Procedure e a msg
+break =
+    Task.fail >> fromTask
+
+
+catch : (e -> Procedure f a msg) -> Procedure e a msg -> Procedure f a msg
+catch generator procedure =
+    (\aResult ->
+        case aResult of
+            Ok aData ->
+                provide aData
+
+            Err eData ->
+                generator eData
+    )
+        |> next procedure
+
+
+andThen : (a -> Procedure e b msg) -> Procedure e a msg -> Procedure e b msg
+andThen generator procedure =
+    (\aResult ->
+        case aResult of
+            Ok aData ->
+                generator aData
+
+            Err eData ->
+                break eData
+    )
+        |> next procedure
+
+
+collect : List (Procedure e a msg) -> Procedure e (List a) msg
+collect procedures =
+    case procedures of
+        [] ->
+            emptyProcedure
+
+        procedure :: remainingProcedures ->
+            List.foldl (addToList >> andThen) (addToList procedure []) remainingProcedures
+
+
+addToList : Procedure e a msg -> List a -> Procedure e (List a) msg
+addToList procedure collector =
+    (\aResult ->
+        case aResult of
+            Ok aData ->
+                [ aData ]
+                    |> List.append collector
+                    |> provide
+
+            Err eData ->
+                break eData
+    )
+        |> next procedure
+
+
+emptyProcedure : Procedure e a msg
+emptyProcedure =
+    (\_ _ _ -> Cmd.none) |> Procedure
+
+
+map : (a -> b) -> Procedure e a msg -> Procedure e b msg
+map mapper =
+    andThen (mapper >> provide)
+
+
+map2 : (a -> b -> c) -> Procedure e a msg -> Procedure e b msg -> Procedure e c msg
+map2 mapper procedureA procedureB =
+    procedureA
+        |> andThen
+            (\aData ->
+                procedureB
+                    |> map (mapper aData)
+            )
+
+
+map3 : (a -> b -> c -> d) -> Procedure e a msg -> Procedure e b msg -> Procedure e c msg -> Procedure e d msg
+map3 mapper procedureA procedureB procedureC =
+    procedureA
+        |> andThen
+            (\aData ->
+                map2 (mapper aData) procedureB procedureC
+            )
+
+
+mapError : (e -> f) -> Procedure e a msg -> Procedure f a msg
+mapError mapper procedure =
+    (\aResult ->
+        case aResult of
+            Ok aData ->
+                provide aData
+
+            Err eData ->
+                mapper eData
+                    |> break
+    )
+        |> next procedure
+
+
+next : Procedure e a msg -> (Result e a -> Procedure f b msg) -> Procedure f b msg
+next (Procedure procedure) resultMapper =
+    (\procId msgTagger tagger ->
+        (\aResult ->
+            let
+                (Procedure nextProcedure) =
+                    resultMapper aResult
+            in
+            nextProcedure procId msgTagger tagger
+                |> (Execute procId >> msgTagger)
+        )
+            |> procedure procId msgTagger
+    )
+        |> Procedure
+
+
+try : (Msg msg -> msg) -> (Result e a -> msg) -> Procedure e a msg -> Cmd msg
+try msgTagger tagger (Procedure procedure) =
+    Task.succeed (\procId -> procedure procId msgTagger tagger)
+        |> Task.perform (Initiate >> msgTagger)
+
+
+run : (Msg msg -> msg) -> (a -> msg) -> Procedure Never a msg -> Cmd msg
+run msgTagger tagger =
+    try msgTagger
+        (\result ->
+            case result of
+                Ok data ->
+                    tagger data
+
+                Err e ->
+                    never e
+        )
+
+
+
+-- Channel
+
+
+type Channel a msg
+    = Channel
+        { request : String -> Cmd msg
+        , subscription : (a -> msg) -> Sub msg
+        , shouldAccept : String -> a -> Bool
         }
 
 
-eval : Proc s x a -> s -> ( s, Cmd (Proc s x a) )
-eval (State io) state =
-    case io state of
-        ( innerS, PTask t ) ->
-            ( innerS
-            , Task.attempt
-                (\r ->
-                    case r of
-                        Ok x ->
-                            x
+type ChannelRequest msg
+    = ChannelRequest (String -> Cmd msg)
 
-                        Err e ->
-                            err e
+
+open : (String -> Cmd msg) -> ChannelRequest msg
+open =
+    ChannelRequest
+
+
+connect : ((a -> msg) -> Sub msg) -> ChannelRequest msg -> Channel a msg
+connect generator (ChannelRequest requestGenerator) =
+    Channel
+        { request = requestGenerator
+        , subscription = generator
+        , shouldAccept = defaultPredicate
+        }
+
+
+join : ((a -> msg) -> Sub msg) -> Channel a msg
+join generator =
+    Channel
+        { request = defaultRequest
+        , subscription = generator
+        , shouldAccept = defaultPredicate
+        }
+
+
+filter : (String -> a -> Bool) -> Channel a msg -> Channel a msg
+filter predicate (Channel channel) =
+    Channel
+        { channel | shouldAccept = predicate }
+
+
+acceptOne : Channel a msg -> Procedure e a msg
+acceptOne =
+    always True |> acceptUntil
+
+
+accept : Channel a msg -> Procedure e a msg
+accept =
+    always False |> acceptUntil
+
+
+acceptUntil : (a -> Bool) -> Channel a msg -> Procedure e a msg
+acceptUntil shouldUnsubscribe (Channel channel) =
+    (\procId msgTagger resultTagger ->
+        let
+            requestCommandMsg channelId =
+                channel.request (channelKey channelId)
+                    |> (Execute procId >> msgTagger)
+
+            subGenerator channelId =
+                (\aData ->
+                    if channel.shouldAccept (channelKey channelId) aData then
+                        generateMsg channelId aData
+
+                    else
+                        msgTagger Continue
                 )
-                t
-            )
+                    |> channel.subscription
 
-        ( innerS, PProc p ) ->
-            ( innerS
-              --, Procedure.try
-              --    identity
-              --    (\r ->
-              --        case r of
-              --            Ok x ->
-              --                x
-              --
-              --            Err e ->
-              --                err e
-              --    )
-              --    p
-            , Debug.todo ""
-            )
+            generateMsg channelId aData =
+                if shouldUnsubscribe aData then
+                    Ok aData
+                        |> resultTagger
+                        |> (Unsubscribe procId channelId >> msgTagger)
 
-        ( innerS, POk x ) ->
-            ( innerS
-            , Cmd.none
-            )
-
-        ( innerS, PErr e ) ->
-            ( innerS
-            , Cmd.none
-            )
-
-
-
--- Constructors
-
-
-{-| Wraps a value as an `Proc`, bringing a pure value into the imperative structure.
--}
-pure : a -> Proc s x a
-pure val =
-    (\s -> ( s, POk val ))
-        |> State
-
-
-{-| Builds an error as an `Proc`, allowing errors in imperative programs. This is
-like the `throw` operation.
--}
-err : x -> Proc s x a
-err e =
-    (\s -> ( s, PErr e ))
-        |> State
-
-
-{-| Turns an Elm task into an `Proc`, allowing some IO operation to be run, and that
-may produce errors.
--}
-task : Task.Task x a -> Proc s x a
-task t =
-    (\s -> ( s, t |> Task.map pure |> PTask ))
-        |> State
-
-
-{-| Convert `Result` into an `Proc`.
--}
-result : Result x a -> Proc s x a
-result res =
-    case res of
-        Ok x ->
-            pure x
-
-        Err e ->
-            err e
-
-
-{-| Given the current state of an imperative program, produce a new state and current
-value for the program.
--}
-advance : (s -> ( s, a )) -> Proc s x a
-advance fn =
-    (\s -> fn s |> Tuple.mapSecond POk)
-        |> State
-
-
-
--- Combinators for building imperative programs
-
-
-{-| Given an `Proc` allows a new `Proc` to be created based on its current value.
-
-This allows imperative operations to be chained together, when the subsequent operation
-depends on the results of the one before.
-
--}
-andThen : (a -> Proc s x b) -> Proc s x a -> Proc s x b
-andThen mf (State io) =
-    (\s ->
-        case io s of
-            ( innerS, PTask t ) ->
-                ( innerS
-                , Task.andThen (\inner -> Task.succeed (andThen mf inner)) t
-                    |> PTask
-                )
-
-            ( innerS, PProc p ) ->
-                ( innerS
-                , Procedure.andThen (\inner -> Procedure.provide (andThen mf inner)) p
-                    |> PProc
-                )
-
-            ( innerS, POk x ) ->
-                let
-                    (State stateFn) =
-                        mf x
-                in
-                stateFn innerS
-
-            ( innerS, PErr e ) ->
-                ( innerS
-                , PErr e
-                )
+                else
+                    Ok aData
+                        |> resultTagger
+        in
+        Task.succeed subGenerator
+            |> Task.perform (Subscribe procId requestCommandMsg >> msgTagger)
     )
-        |> State
+        |> Procedure
 
 
-{-| Apply the function that is inside `Proc` to a value that is inside `Proc`. Return the result
-inside `Proc`. If one of the `Proc`s in on the error track, the resulting `Proc` will also be on the
-error track.
--}
-andMap : Proc s x a -> Proc s x (a -> b) -> Proc s x b
-andMap ma mf =
-    andThen (\f -> map f ma) mf
+channelKey : Int -> String
+channelKey channelId =
+    "Channel-" ++ String.fromInt channelId
 
 
-{-| Given an `Proc` allows a new `Proc` to be created based on it being on the error track and
-the value of the current error.
-
-This allows imperative operations that produce errors to be chained together, with the option to
-recover back onto the success track.
-
--}
-onError : (x -> Proc s y a) -> Proc s x a -> Proc s y a
-onError ef (State io) =
-    (\s ->
-        case io s of
-            ( innerS, PTask t ) ->
-                ( innerS
-                , Task.onError
-                    (\e -> ef e |> Task.succeed)
-                    (t |> Task.map (onError ef))
-                    |> PTask
-                )
-
-            ( innerS, PProc p ) ->
-                ( innerS
-                , Procedure.catch
-                    (\e -> ef e |> Procedure.provide)
-                    (p |> Procedure.map (onError ef))
-                    |> PProc
-                )
-
-            ( innerS, POk x ) ->
-                ( innerS, POk x )
-
-            ( innerS, PErr e ) ->
-                let
-                    (State stateFn) =
-                        ef e
-                in
-                stateFn innerS
-    )
-        |> State
+defaultRequest : String -> Cmd msg
+defaultRequest _ =
+    Cmd.none
 
 
-{-| Applies a function the current value of an `Proc`, provided it is not on the error track.
--}
-map : (a -> b) -> Proc s x a -> Proc s x b
-map mf (State io) =
-    (\s ->
-        case io s of
-            ( innerS, PTask t ) ->
-                ( innerS
-                , Task.andThen (\inner -> Task.succeed (map mf inner)) t |> PTask
-                )
-
-            ( innerS, PProc p ) ->
-                ( innerS
-                , Procedure.andThen (\inner -> Procedure.provide (map mf inner)) p |> PProc
-                )
-
-            ( innerS, POk x ) ->
-                ( innerS
-                , mf x |> POk
-                )
-
-            ( innerS, PErr e ) ->
-                ( innerS
-                , PErr e
-                )
-    )
-        |> State
+defaultPredicate : String -> a -> Bool
+defaultPredicate _ _ =
+    True
 
 
 
--- More maps
+-- Program
 
 
-{-| Applies a function to current values of two `Proc`s if both `Proc`s are not on the error track.
--}
-map2 :
-    (a -> b -> c)
-    -> Proc s x a
-    -> Proc s x b
-    -> Proc s x c
-map2 f p1 p2 =
-    pure f
-        |> andMap p1
-        |> andMap p2
+type Model msg
+    = Model (Registry msg)
 
 
-{-| Applies a function to many values of many `Proc`s if all `Proc`s are not on the error track.
--}
-map3 :
-    (a -> b -> c -> d)
-    -> Proc s x a
-    -> Proc s x b
-    -> Proc s x c
-    -> Proc s x d
-map3 f p1 p2 p3 =
-    pure f
-        |> andMap p1
-        |> andMap p2
-        |> andMap p3
+type alias Registry msg =
+    { nextId : Int
+    , channels : Dict Int (Sub msg)
+    }
 
 
-{-| Applies a function to many values of many `Proc`s if all `Proc`s are not on the error track.
--}
-map4 :
-    (a -> b -> c -> d -> e)
-    -> Proc s x a
-    -> Proc s x b
-    -> Proc s x c
-    -> Proc s x d
-    -> Proc s x e
-map4 f p1 p2 p3 p4 =
-    pure f
-        |> andMap p1
-        |> andMap p2
-        |> andMap p3
-        |> andMap p4
+init : Model msg
+init =
+    { nextId = 0
+    , channels = Dict.empty
+    }
+        |> Model
 
 
-{-| Applies a function to many values of many `Proc`s if all `Proc`s are not on the error track.
--}
-map5 :
-    (a -> b -> c -> d -> e -> f)
-    -> Proc s x a
-    -> Proc s x b
-    -> Proc s x c
-    -> Proc s x d
-    -> Proc s x e
-    -> Proc s x f
-map5 f p1 p2 p3 p4 p5 =
-    pure f
-        |> andMap p1
-        |> andMap p2
-        |> andMap p3
-        |> andMap p4
-        |> andMap p5
+update : Msg msg -> Model msg -> ( Model msg, Cmd msg )
+update msg (Model registry) =
+    updateProcedures msg registry
+        |> Tuple.mapFirst Model
 
 
-{-| Applies a function to many values of many `Proc`s if all `Proc`s are not on the error track.
--}
-map6 :
-    (a -> b -> c -> d -> e -> f -> g)
-    -> Proc s x a
-    -> Proc s x b
-    -> Proc s x c
-    -> Proc s x d
-    -> Proc s x e
-    -> Proc s x f
-    -> Proc s x g
-map6 f p1 p2 p3 p4 p5 p6 =
-    pure f
-        |> andMap p1
-        |> andMap p2
-        |> andMap p3
-        |> andMap p4
-        |> andMap p5
-        |> andMap p6
+updateProcedures : Msg msg -> Registry msg -> ( Registry msg, Cmd msg )
+updateProcedures msg registry =
+    case msg of
+        Initiate generator ->
+            ( { registry | nextId = registry.nextId + 1 }
+            , generator registry.nextId
+            )
+
+        Execute _ cmd ->
+            ( registry
+            , cmd
+            )
+
+        Subscribe _ messageGenerator subGenerator ->
+            ( addChannel subGenerator registry
+            , messageGenerator registry.nextId
+                |> sendMessage
+            )
+
+        Unsubscribe _ channelId nextMessage ->
+            ( deleteChannel channelId registry
+            , sendMessage nextMessage
+            )
+
+        Continue ->
+            ( registry, Cmd.none )
 
 
-
--- State management
-
-
-{-| An `Proc` that gets the current state as the current value.
--}
-get : Proc s x s
-get =
-    State (\s -> ( s, POk s ))
+addChannel : (Int -> Sub msg) -> Registry msg -> Registry msg
+addChannel subGenerator registry =
+    { registry
+        | nextId = registry.nextId + 1
+        , channels = Dict.insert registry.nextId (subGenerator registry.nextId) registry.channels
+    }
 
 
-{-| An `Proc` that takes the given current state.
--}
-put : s -> Proc s x ()
-put s =
-    State (\_ -> ( s, POk () ))
+deleteChannel : Int -> Registry msg -> Registry msg
+deleteChannel channelId procModel =
+    { procModel | channels = Dict.remove channelId procModel.channels }
 
 
-{-| Applies a function to the current state to produce an `Proc` with a new current state.
--}
-modify : (s -> s) -> Proc s x ()
-modify fn =
-    State (\s -> ( fn s, POk () ))
+sendMessage : msg -> Cmd msg
+sendMessage msg =
+    Task.succeed ()
+        |> Task.perform (always msg)
 
 
-
--- Sequencing lists of imperatives
-
-
-{-| Given a list of `Proc`s, evaluates them all and produces a list of their current
-values, provided that none of them switch to the error track.
-
-In the case where one or more of them produce errors, only the first error encountered
-in the list will become the error value of the result.
-
--}
-sequence : List (Proc s x a) -> Proc s x (List a)
-sequence ios =
-    List.foldr (map2 (::)) (pure []) ios
+subscriptions : Model msg -> Sub msg
+subscriptions (Model registry) =
+    Dict.values registry.channels
+        |> Sub.batch
