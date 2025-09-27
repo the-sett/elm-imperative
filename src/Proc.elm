@@ -611,6 +611,8 @@ sequence ios =
 -- Channel
 
 
+{-| A channel represents a source of events that can be polled off the channel as a Proc.
+-}
 type Channel s x a
     = Channel
         { request : String -> Cmd (Proc s x a)
@@ -619,10 +621,16 @@ type Channel s x a
         }
 
 
+{-| A ChannelRequest represnets a request to a channel that may trigger an event from that channel.
+Typically a channel request is created from a Cmd, and then connected to a Sub, in order to form a
+request/response pair that acts as a task port.
+-}
 type ChannelRequest s x a
     = ChannelRequest (String -> Cmd (Proc s x a))
 
 
+{-| Join a subscription as a Channel producing Procs
+-}
 join : ((a -> Proc s x a) -> Sub (Proc s x a)) -> Channel s x a
 join generator =
     Channel
@@ -632,11 +640,15 @@ join generator =
         }
 
 
+{-| Open a channel request with a Cmd.
+-}
 open : (String -> Cmd (Proc s x a)) -> ChannelRequest s x a
 open =
     ChannelRequest
 
 
+{-| Connect a channel request to a subscription that responds to the channel request.
+-}
 connect : ((a -> Proc s x a) -> Sub (Proc s x a)) -> ChannelRequest s x a -> Channel s x a
 connect generator (ChannelRequest requestGenerator) =
     Channel
@@ -646,22 +658,31 @@ connect generator (ChannelRequest requestGenerator) =
         }
 
 
+{-| Filters a channel.
+-}
 filter : (String -> a -> Bool) -> Channel s x a -> Channel s x a
 filter predicate (Channel channel) =
     Channel
         { channel | shouldAccept = predicate }
 
 
+{-| Accepts a single event from a channel before closing it.
+-}
 acceptOne : Channel s x a -> Proc s x a
 acceptOne =
     always True |> acceptUntil
 
 
+{-| Accepts a single event from a channel but leaves it open so it can produce more events.
+-}
 accept : Channel s x a -> Proc s x a
 accept =
     always False |> acceptUntil
 
 
+{-| Accepts a single event from a channel and may continue to leave the channel open to producing more events
+based on a predicate on the last item produced by the channel.
+-}
 acceptUntil : (a -> Bool) -> Channel s x a -> Proc s x a
 acceptUntil shouldUnsubscribe (Channel channel) =
     (\pid s ->
