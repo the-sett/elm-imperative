@@ -2,6 +2,7 @@ port module Main exposing (..)
 
 import Proc
 import Task
+import Time
 
 
 port request : String -> Cmd msg
@@ -46,6 +47,19 @@ example =
         |> Proc.andThen (\_ -> Proc.modify (\state -> { state | messages = List.reverse state.messages }))
 
 
+example2 : Proc.Proc Example String ()
+example2 =
+    Proc.join (Time.every 500)
+        |> Proc.accept
+        |> Proc.map (Time.posixToMillis >> String.fromInt >> Debug.log "tick")
+        |> Proc.andThen push
+        |> Proc.andThen (\_ -> Proc.pure "success")
+        |> Proc.andThen push
+        |> Proc.andThen (\_ -> Proc.get)
+        |> Proc.map (\s -> Debug.log "state" s)
+        |> Proc.andThen (\_ -> Proc.modify (\state -> { state | messages = List.reverse state.messages }))
+
+
 push : String -> Proc.Proc Example String ()
 push msg =
     Proc.modify (\state -> { state | messages = msg :: state.messages })
@@ -60,4 +74,4 @@ main =
     Proc.program
         ()
         (always { messages = [ "initial" ] })
-        example
+        example2
