@@ -82,16 +82,16 @@ type Model s x a
 {-| Proc combines `Result`, `Task` and the state monad together.
 -}
 type Proc s x a
-    = Proc (Int -> s -> ( s, T s x a ))
+    = Proc (s -> ( s, T s x a ))
 
 
 type T s x a
     = PTask (Task.Task x (Proc s x a))
     | POk a
     | PErr x
-    | PSubscribe Int (Int -> Proc s x a) (Int -> Sub (Proc s x a))
-    | PUnsubscribe Int Int (Proc s x a)
-    | PExecute Int (Cmd (Proc s x a))
+    | PSubscribe (Int -> Proc s x a) (Int -> Sub (Proc s x a))
+    | PUnsubscribe Int (Proc s x a)
+    | PExecute (Cmd (Proc s x a))
 
 
 
@@ -159,7 +159,7 @@ update (Proc io) (Registry reg) =
         deleteChannel channelId innerReg =
             { innerReg | channels = Dict.remove channelId innerReg.channels }
     in
-    case io reg.nextId reg.state of
+    case io reg.state of
         ( nextS, PTask t ) ->
             ( { reg | state = nextS } |> Registry
             , Task.attempt
@@ -184,7 +184,7 @@ update (Proc io) (Registry reg) =
             , Cmd.none
             )
 
-        ( nextS, PSubscribe _ messageGenerator subGenerator ) ->
+        ( nextS, PSubscribe messageGenerator subGenerator ) ->
             let
                 nextReg =
                     addChannel subGenerator reg
@@ -194,7 +194,7 @@ update (Proc io) (Registry reg) =
                 |> sendMessage
             )
 
-        ( nextS, PUnsubscribe _ channelId nextMessage ) ->
+        ( nextS, PUnsubscribe channelId nextMessage ) ->
             let
                 nextReg =
                     deleteChannel channelId reg
@@ -203,7 +203,7 @@ update (Proc io) (Registry reg) =
             , sendMessage nextMessage
             )
 
-        ( nextS, PExecute _ cmd ) ->
+        ( nextS, PExecute cmd ) ->
             ( { reg | state = nextS } |> Registry
             , cmd
             )
@@ -240,7 +240,7 @@ sendMessage msg =
 -}
 pure : a -> Proc s x a
 pure val =
-    (\_ s -> ( s, POk val ))
+    (\s -> ( s, POk val ))
         |> Proc
 
 
@@ -249,7 +249,7 @@ like the `throw` operation.
 -}
 err : x -> Proc s x a
 err e =
-    (\_ s -> ( s, PErr e ))
+    (\s -> ( s, PErr e ))
         |> Proc
 
 
@@ -258,7 +258,7 @@ may produce errors.
 -}
 task : Task.Task x a -> Proc s x a
 task t =
-    (\_ s -> ( s, t |> Task.map pure |> PTask ))
+    (\s -> ( s, t |> Task.map pure |> PTask ))
         |> Proc
 
 
@@ -266,8 +266,8 @@ task t =
 -}
 do : Cmd a -> Proc s x a
 do command =
-    (\pid s ->
-        ( s, Cmd.map pure command |> PExecute pid )
+    (\s ->
+        ( s, Cmd.map pure command |> PExecute )
     )
         |> Proc
 
@@ -289,7 +289,7 @@ value for the program.
 -}
 advance : (s -> ( s, a )) -> Proc s x a
 advance fn =
-    (\pid s ->
+    (\s ->
         let
             ( nextS, a ) =
                 fn s
@@ -311,8 +311,8 @@ depends on the results of the one before.
 -}
 andThen : (a -> Proc s x b) -> Proc s x a -> Proc s x b
 andThen mf (Proc io) =
-    (\pid s ->
-        case io pid s of
+    (\s ->
+        case io s of
             ( nextS, PTask t ) ->
                 ( nextS
                 , Task.andThen (\inner -> Task.succeed (andThen mf inner)) t
@@ -324,14 +324,14 @@ andThen mf (Proc io) =
                     (Proc stateFn) =
                         mf x
                 in
-                stateFn pid nextS
+                stateFn nextS
 
             ( nextS, PErr e ) ->
                 ( nextS
                 , PErr e
                 )
 
-            ( nextS, PSubscribe procId generator subGenerator ) ->
+            ( nextS, PSubscribe generator subGenerator ) ->
                 let
                     mappedGen =
                         generator >> andThen mf
@@ -340,17 +340,17 @@ andThen mf (Proc io) =
                         subGenerator >> Sub.map (andThen mf)
                 in
                 ( nextS
-                , PSubscribe procId mappedGen mappedSubGen
+                , PSubscribe mappedGen mappedSubGen
                 )
 
-            ( nextS, PUnsubscribe procId channelId nextProc ) ->
+            ( nextS, PUnsubscribe channelId nextProc ) ->
                 ( nextS
-                , andThen mf nextProc |> PUnsubscribe procId channelId
+                , andThen mf nextProc |> PUnsubscribe channelId
                 )
 
-            ( nextS, PExecute procId command ) ->
+            ( nextS, PExecute command ) ->
                 ( nextS
-                , Cmd.map (\p -> andThen mf p) command |> PExecute procId
+                , Cmd.map (\p -> andThen mf p) command |> PExecute
                 )
     )
         |> Proc
@@ -374,8 +374,8 @@ recover back onto the success track.
 -}
 onError : (x -> Proc s y a) -> Proc s x a -> Proc s y a
 onError ef (Proc io) =
-    (\pid s ->
-        case io pid s of
+    (\s ->
+        case io s of
             ( nextS, PTask t ) ->
                 ( nextS
                 , Task.onError
@@ -392,9 +392,9 @@ onError ef (Proc io) =
                     (Proc stateFn) =
                         ef e
                 in
-                stateFn pid nextS
+                stateFn nextS
 
-            ( nextS, PSubscribe procId generator subGenerator ) ->
+            ( nextS, PSubscribe generator subGenerator ) ->
                 let
                     mappedGen =
                         generator >> onError ef
@@ -403,17 +403,17 @@ onError ef (Proc io) =
                         subGenerator >> Sub.map (onError ef)
                 in
                 ( nextS
-                , PSubscribe procId mappedGen mappedSubGen
+                , PSubscribe mappedGen mappedSubGen
                 )
 
-            ( nextS, PUnsubscribe procId channelId nextProc ) ->
+            ( nextS, PUnsubscribe channelId nextProc ) ->
                 ( nextS
-                , onError ef nextProc |> PUnsubscribe procId channelId
+                , onError ef nextProc |> PUnsubscribe channelId
                 )
 
-            ( nextS, PExecute procId command ) ->
+            ( nextS, PExecute command ) ->
                 ( nextS
-                , Cmd.map (\p -> onError ef p) command |> PExecute procId
+                , Cmd.map (\p -> onError ef p) command |> PExecute
                 )
     )
         |> Proc
@@ -421,8 +421,8 @@ onError ef (Proc io) =
 
 mapBoth : (a -> b) -> (x -> y) -> Proc s x a -> Proc s y b
 mapBoth mf ef (Proc io) =
-    (\pid s ->
-        case io pid s of
+    (\s ->
+        case io s of
             ( nextS, PTask t ) ->
                 ( nextS
                 , t
@@ -441,7 +441,7 @@ mapBoth mf ef (Proc io) =
                 , ef e |> PErr
                 )
 
-            ( nextS, PSubscribe procId generator subGenerator ) ->
+            ( nextS, PSubscribe generator subGenerator ) ->
                 let
                     mappedGen =
                         generator >> mapBoth mf ef
@@ -450,17 +450,17 @@ mapBoth mf ef (Proc io) =
                         subGenerator >> Sub.map (mapBoth mf ef)
                 in
                 ( nextS
-                , PSubscribe procId mappedGen mappedSubGen
+                , PSubscribe mappedGen mappedSubGen
                 )
 
-            ( nextS, PUnsubscribe procId channelId nextProc ) ->
+            ( nextS, PUnsubscribe channelId nextProc ) ->
                 ( nextS
-                , mapBoth mf ef nextProc |> PUnsubscribe procId channelId
+                , mapBoth mf ef nextProc |> PUnsubscribe channelId
                 )
 
-            ( nextS, PExecute procId command ) ->
+            ( nextS, PExecute command ) ->
                 ( nextS
-                , PExecute procId (Cmd.map (mapBoth mf ef) command)
+                , PExecute (Cmd.map (mapBoth mf ef) command)
                 )
     )
         |> Proc
@@ -575,21 +575,21 @@ map6 f p1 p2 p3 p4 p5 p6 =
 -}
 get : Proc s x s
 get =
-    Proc (\_ s -> ( s, POk s ))
+    Proc (\s -> ( s, POk s ))
 
 
 {-| An `Proc` that takes the given current state.
 -}
 put : s -> Proc s x ()
 put s =
-    Proc (\_ _ -> ( s, POk () ))
+    Proc (\_ -> ( s, POk () ))
 
 
 {-| Applies a function to the current state to produce an `Proc` with a new current state.
 -}
 modify : (s -> s) -> Proc s x ()
 modify fn =
-    Proc (\_ s -> ( fn s, POk () ))
+    Proc (\s -> ( fn s, POk () ))
 
 
 
@@ -686,14 +686,14 @@ based on a predicate on the last item produced by the channel.
 -}
 acceptUntil : (a -> Bool) -> Channel s x a -> Proc s x a
 acceptUntil shouldUnsubscribe (Channel channel) =
-    (\pid s ->
+    (\s ->
         let
             requestCommandMsg : Int -> Proc s x a
             requestCommandMsg channelId =
-                (\_ innerS ->
+                (\innerS ->
                     ( innerS
                     , channel.request (channelKey channelId)
-                        |> PExecute pid
+                        |> PExecute
                     )
                 )
                     |> Proc
@@ -702,7 +702,7 @@ acceptUntil shouldUnsubscribe (Channel channel) =
             subGenerator channelId =
                 (\aData ->
                     if channel.shouldAccept (channelKey channelId) aData then
-                        (\_ innerS ->
+                        (\innerS ->
                             ( innerS
                             , generateMsg channelId aData
                             )
@@ -710,7 +710,7 @@ acceptUntil shouldUnsubscribe (Channel channel) =
                             |> Proc
 
                     else
-                        (\_ innerS ->
+                        (\innerS ->
                             ( innerS
                             , POk aData
                             )
@@ -722,7 +722,7 @@ acceptUntil shouldUnsubscribe (Channel channel) =
             generateMsg : Int -> a -> T s x a
             generateMsg channelId aData =
                 if shouldUnsubscribe aData then
-                    PUnsubscribe (pid |> Debug.log "PUnsubscribe:pid")
+                    PUnsubscribe
                         (channelId |> Debug.log "PUnsubscribe:channelId")
                         (pure aData)
 
@@ -730,7 +730,7 @@ acceptUntil shouldUnsubscribe (Channel channel) =
                     POk aData
         in
         ( s
-        , PSubscribe (pid |> Debug.log "PSubscribe:pid") requestCommandMsg subGenerator
+        , PSubscribe requestCommandMsg subGenerator
         )
     )
         |> Proc
