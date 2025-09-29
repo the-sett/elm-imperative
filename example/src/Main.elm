@@ -118,6 +118,7 @@ example2 n =
     if n == 0 then
         Proc.get
             |> Proc.map (\s -> Debug.log "state" s)
+            |> Proc.return
 
     else
         (Proc.join (Time.every 500) |> Proc.acceptOne)
