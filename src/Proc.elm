@@ -1,7 +1,7 @@
 module Proc exposing
     ( Proc
     , Program, program
-    , Model, init, subscriptions, update
+    , Model, Protocol, init, subscriptions, update
     , pure, err, result, task, do, advance
     , andThen, andMap, onError, map
     , map2, map3, map4, map5, map6
@@ -25,7 +25,7 @@ state monad. This helps you do stateful programming with IO and error handling.
 
 # TEA structure for hooking this into larger programs
 
-@docs Model, init, subscriptions, update
+@docs Model, Protocol, init, subscriptions, update
 
 
 # Constructors
@@ -108,15 +108,35 @@ type alias Program flags s x a =
 -}
 program : flags -> (flags -> s) -> Proc s x a -> Program flags s x a
 program flags initFn io =
+    let
+        protocol =
+            { toMsg = identity
+            , onUpdate = identity
+            , onReturn = \_ _ -> identity
+            }
+    in
     Platform.worker
-        { init = \_ -> update io (initFn flags |> init)
-        , update = update
-        , subscriptions = subscriptions
+        { init = \_ -> update protocol io (initFn flags |> init)
+        , update = update protocol
+        , subscriptions = subscriptions protocol
         }
 
 
 
 -- TEA structure for hooking this into larger programs
+
+
+{-| Protocol describes the outcomes possible when running a single step of the update loop for processing
+a Proc and for lifting them into a parent update loop.
+
+A Proc will typically do a normal 'onUpdate' many times and terminate with a single `onReturn`.
+
+-}
+type alias Protocol s x a submodel msg model =
+    { toMsg : Proc s x a -> msg
+    , onUpdate : ( submodel, Cmd (Proc s x a) ) -> ( model, Cmd msg )
+    , onReturn : s -> Result x a -> ( submodel, Cmd (Proc s x a) ) -> ( model, Cmd msg )
+    }
 
 
 {-| Create the Model from some starting state.
@@ -130,25 +150,26 @@ init s =
         |> Registry
 
 
-type alias Protocol s x a msg =
-    { toMsg : Proc s x a -> msg
-    , onReturn : (s -> Result x a -> msg) -> msg
-    }
-
-
 {-| Provides the subscriptions needed to evaluate against the Model.
 -}
-subscriptions : Model s x a -> Sub (Proc s x a)
-subscriptions (Registry reg) =
+subscriptions : Protocol s x a (Model s x a) msg model -> Model s x a -> Sub msg
+subscriptions protocol (Registry reg) =
     Dict.values reg.channels
         |> Sub.batch
+        |> Sub.map protocol.toMsg
 
 
 {-| Evalulates a Proc against a Model, producing a new model and some Cmds until the Proc is fully evaluated
 and terminates.
 -}
-update : Proc s x a -> Model s x a -> ( Model s x a, Cmd (Proc s x a) )
-update (Proc io) (Registry reg) =
+
+
+
+--update : Proc s x a -> Model s x a -> ( Model s x a, Cmd (Proc s x a) )
+
+
+update : Protocol s x a (Model s x a) msg model -> Proc s x a -> Model s x a -> ( model, Cmd msg )
+update protocol (Proc io) (Registry reg) =
     let
         addChannel subGenerator innerReg =
             { innerReg
@@ -173,16 +194,19 @@ update (Proc io) (Registry reg) =
                 )
                 t
             )
+                |> protocol.onUpdate
 
         ( nextS, POk x ) ->
             ( { reg | state = nextS } |> Registry
             , Cmd.none
             )
+                |> protocol.onUpdate
 
         ( nextS, PErr e ) ->
             ( { reg | state = nextS } |> Registry
             , Cmd.none
             )
+                |> protocol.onUpdate
 
         ( nextS, PSubscribe messageGenerator subGenerator ) ->
             let
@@ -191,8 +215,10 @@ update (Proc io) (Registry reg) =
             in
             ( { nextReg | state = nextS } |> Registry
             , messageGenerator reg.nextId
+                -- reg.nextId is correct here. nextReg.nextId contains the bumped value for the next subscription.
                 |> sendMessage
             )
+                |> protocol.onUpdate
 
         ( nextS, PUnsubscribe channelId nextMessage ) ->
             let
@@ -202,11 +228,13 @@ update (Proc io) (Registry reg) =
             ( { nextReg | state = nextS } |> Registry
             , sendMessage nextMessage
             )
+                |> protocol.onUpdate
 
         ( nextS, PExecute cmd ) ->
             ( { reg | state = nextS } |> Registry
             , cmd
             )
+                |> protocol.onUpdate
 
 
 sendMessage : msg -> Cmd msg

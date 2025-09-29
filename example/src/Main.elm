@@ -5,13 +5,78 @@ import Task
 import Time
 
 
+type alias Model =
+    { procModel : Proc.Model State String State
+    }
+
+
+type Msg
+    = ProcMsg (Proc.Proc State String State)
+
+
+protocol : Model -> Proc.Protocol State String State (Proc.Model State String State) Msg Model
+protocol model =
+    { toMsg = ProcMsg
+    , onUpdate = Tuple.mapBoth (\pm -> { model | procModel = pm }) (Cmd.map ProcMsg)
+    , onReturn =
+        \s res ( pm, _ ) ->
+            let
+                _ =
+                    Debug.log "Returned" { state = s, result = res }
+            in
+            ( { model | procModel = pm }, Cmd.none )
+    }
+
+
+main : Platform.Program () Model Msg
+main =
+    Platform.worker
+        { init = init
+        , update = update
+        , subscriptions = subscriptions
+        }
+
+
+init : () -> ( Model, Cmd Msg )
+init _ =
+    let
+        exampleProc =
+            -- example
+            example2 5
+    in
+    ( { procModel = Proc.init { messages = [ "initial" ] }
+      }
+    , Cmd.none
+    )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        ProcMsg proc ->
+            Proc.update (protocol model) proc model.procModel
+
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    Proc.subscriptions (protocol model) model.procModel
+
+
+
+-- Test ports
+
+
 port request : String -> Cmd msg
 
 
 port response : (String -> msg) -> Sub msg
 
 
-type alias Example =
+
+-- Example Procs
+
+
+type alias State =
     { messages : List String }
 
 
@@ -22,7 +87,7 @@ roundTrip val =
         |> Proc.acceptOne
 
 
-example : Proc.Proc Example String ()
+example : Proc.Proc State String ()
 example =
     Proc.task (Task.succeed "success1")
         |> Proc.andThen push
@@ -47,7 +112,7 @@ example =
         |> Proc.andThen (\_ -> Proc.modify (\state -> { state | messages = List.reverse state.messages }))
 
 
-example2 : Int -> Proc.Proc Example String Example
+example2 : Int -> Proc.Proc State String State
 example2 n =
     if n == 0 then
         Proc.get
@@ -62,18 +127,11 @@ example2 n =
             |> Proc.andThen (\_ -> example2 (n - 1))
 
 
-push : String -> Proc.Proc Example String ()
+push : String -> Proc.Proc State String ()
 push msg =
     Proc.modify (\state -> { state | messages = msg :: state.messages })
 
 
-recover : String -> Proc.Proc Example String ()
+recover : String -> Proc.Proc State String ()
 recover msg =
     Proc.pure ("recovered " ++ msg) |> Proc.andThen push
-
-
-main =
-    Proc.program
-        ()
-        (always { messages = [ "initial" ] })
-        (example2 5)
