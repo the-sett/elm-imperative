@@ -41,8 +41,9 @@ init : () -> ( Model, Cmd Msg )
 init _ =
     let
         exampleProc =
-            --example
-            example2 5
+            example
+
+        --example2 5
     in
     ( { procModel = Proc.init { messages = [ "initial" ] }
       }
@@ -52,7 +53,7 @@ init _ =
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
-    case msg of
+    case msg |> Debug.log "Main.update" of
         ProcMsg proc ->
             Proc.update (protocol model) proc model.procModel
 
