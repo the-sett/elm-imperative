@@ -41,12 +41,12 @@ init : () -> ( Model, Cmd Msg )
 init _ =
     let
         exampleProc =
-            -- example
+            --example
             example2 5
     in
     ( { procModel = Proc.init { messages = [ "initial" ] }
       }
-    , Cmd.none
+    , Proc.run ProcMsg exampleProc
     )
 
 
@@ -87,7 +87,7 @@ roundTrip val =
         |> Proc.acceptOne
 
 
-example : Proc.Proc State String ()
+example : Proc.Proc State String State
 example =
     Proc.task (Task.succeed "success1")
         |> Proc.andThen push
@@ -110,6 +110,7 @@ example =
         |> Proc.andThen (\_ -> Proc.get)
         |> Proc.map (\s -> Debug.log "state" s)
         |> Proc.andThen (\_ -> Proc.modify (\state -> { state | messages = List.reverse state.messages }))
+        |> Proc.andThen (\_ -> Proc.get)
 
 
 example2 : Int -> Proc.Proc State String State

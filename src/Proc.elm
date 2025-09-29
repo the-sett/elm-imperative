@@ -1,7 +1,7 @@
 module Proc exposing
     ( Proc
     , Program, program
-    , Model, Protocol, init, subscriptions, update
+    , Model, Protocol, init, subscriptions, update, run
     , pure, err, result, task, do, advance
     , andThen, andMap, onError, map
     , map2, map3, map4, map5, map6
@@ -25,7 +25,7 @@ state monad. This helps you do stateful programming with IO and error handling.
 
 # TEA structure for hooking this into larger programs
 
-@docs Model, Protocol, init, subscriptions, update
+@docs Model, Protocol, init, subscriptions, update, run
 
 
 # Constructors
@@ -162,12 +162,6 @@ subscriptions protocol (Registry reg) =
 {-| Evalulates a Proc against a Model, producing a new model and some Cmds until the Proc is fully evaluated
 and terminates.
 -}
-
-
-
---update : Proc s x a -> Model s x a -> ( Model s x a, Cmd (Proc s x a) )
-
-
 update : Protocol s x a (Model s x a) msg model -> Proc s x a -> Model s x a -> ( model, Cmd msg )
 update protocol (Proc io) (Registry reg) =
     let
@@ -261,6 +255,15 @@ sendMessage msg =
 --                Err e ->
 --                    never e
 --        )
+
+
+run : (Proc s x a -> msg) -> Proc s x a -> Cmd msg
+run toMsg proc =
+    Task.succeed proc
+        |> Task.perform toMsg
+
+
+
 -- Constructors
 
 
