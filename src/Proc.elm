@@ -722,13 +722,15 @@ acceptUntil shouldUnsubscribe (Channel channel) =
             generateMsg : Int -> a -> T s x a
             generateMsg channelId aData =
                 if shouldUnsubscribe aData then
-                    PUnsubscribe pid channelId (pure aData)
+                    PUnsubscribe (pid |> Debug.log "PUnsubscribe:pid")
+                        (channelId |> Debug.log "PUnsubscribe:channelId")
+                        (pure aData)
 
                 else
                     POk aData
         in
         ( s
-        , PSubscribe pid requestCommandMsg subGenerator
+        , PSubscribe (pid |> Debug.log "PSubscribe:pid") requestCommandMsg subGenerator
         )
     )
         |> Proc

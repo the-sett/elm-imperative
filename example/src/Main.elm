@@ -47,13 +47,19 @@ example =
         |> Proc.andThen (\_ -> Proc.modify (\state -> { state | messages = List.reverse state.messages }))
 
 
-example2 : Proc.Proc Example String Example
-example2 =
-    (Proc.join (Time.every 500) |> Proc.accept)
-        |> Proc.map (Time.posixToMillis >> String.fromInt >> Debug.log "tick")
-        |> Proc.andThen push
-        |> Proc.andThen (\_ -> Proc.get)
-        |> Proc.map (\s -> Debug.log "state" s)
+example2 : Int -> Proc.Proc Example String Example
+example2 n =
+    if n == 0 then
+        Proc.get
+            |> Proc.map (\s -> Debug.log "state" s)
+
+    else
+        (Proc.join (Time.every 500) |> Proc.acceptOne)
+            |> Proc.map (Time.posixToMillis >> String.fromInt >> Debug.log "tick")
+            |> Proc.andThen push
+            |> Proc.andThen (\_ -> Proc.get)
+            |> Proc.map (\s -> Debug.log "state" s)
+            |> Proc.andThen (\_ -> example2 (n - 1))
 
 
 push : String -> Proc.Proc Example String ()
@@ -70,4 +76,4 @@ main =
     Proc.program
         ()
         (always { messages = [ "initial" ] })
-        example2
+        (example2 5)
