@@ -754,7 +754,7 @@ acceptUntil shouldUnsubscribe (Channel channel) =
             generateMsg channelId aData =
                 if shouldUnsubscribe aData then
                     PUnsubscribe
-                        (channelId |> Debug.log "PUnsubscribe:channelId")
+                        channelId
                         (pure aData)
 
                 else
