@@ -236,31 +236,11 @@ sendMessage msg =
     Task.succeed () |> Task.perform (always msg)
 
 
-
--- Not sure yet what to do with these:
---try : (Result e a -> Msg) -> Procedure e a -> Cmd Msg
---try tagger (Procedure procedure) =
---    Task.succeed (\procId -> procedure procId tagger)
---        |> Task.perform Initiate
---
---
---run : (a -> Msg) -> Procedure Never a -> Cmd Msg
---run tagger =
---    try
---        (\res ->
---            case res of
---                Ok data ->
---                    tagger data
---
---                Err e ->
---                    never e
---        )
-
-
+{-| Given a Proc starts it running.
+-}
 run : (Proc s x a -> msg) -> Proc s x a -> Cmd msg
 run toMsg proc =
-    Task.succeed proc
-        |> Task.perform toMsg
+    Task.succeed proc |> Task.perform toMsg
 
 
 
