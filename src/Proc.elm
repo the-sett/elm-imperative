@@ -89,7 +89,6 @@ type T s x a
     = PTask (Task.Task x (Proc s x a))
     | POk a
     | PErr x
-    | PInitiate (Int -> Cmd (Proc s x a))
     | PSubscribe Int (Int -> Proc s x a) (Int -> Sub (Proc s x a))
     | PUnsubscribe Int Int (Proc s x a)
     | PExecute Int (Cmd (Proc s x a))
@@ -183,15 +182,6 @@ update (Proc io) (Registry reg) =
         ( nextS, PErr e ) ->
             ( { reg | state = nextS } |> Registry
             , Cmd.none
-            )
-
-        ( nextS, PInitiate generator ) ->
-            ( { reg
-                | nextId = reg.nextId + 1
-                , state = nextS
-              }
-                |> Registry
-            , generator reg.nextId
             )
 
         ( nextS, PSubscribe _ messageGenerator subGenerator ) ->
@@ -341,11 +331,6 @@ andThen mf (Proc io) =
                 , PErr e
                 )
 
-            ( nextS, PInitiate generator ) ->
-                ( nextS
-                , (generator >> Cmd.map (andThen mf)) |> PInitiate
-                )
-
             ( nextS, PSubscribe procId generator subGenerator ) ->
                 let
                     mappedGen =
@@ -409,11 +394,6 @@ onError ef (Proc io) =
                 in
                 stateFn pid nextS
 
-            ( nextS, PInitiate generator ) ->
-                ( nextS
-                , generator >> Cmd.map (\p -> onError ef p) |> PInitiate
-                )
-
             ( nextS, PSubscribe procId generator subGenerator ) ->
                 let
                     mappedGen =
@@ -459,11 +439,6 @@ mapBoth mf ef (Proc io) =
             ( nextS, PErr e ) ->
                 ( nextS
                 , ef e |> PErr
-                )
-
-            ( nextS, PInitiate generator ) ->
-                ( nextS
-                , (generator >> Cmd.map (mapBoth mf ef)) |> PInitiate
                 )
 
             ( nextS, PSubscribe procId generator subGenerator ) ->
