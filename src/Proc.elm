@@ -116,6 +116,10 @@ program flags initFn io =
         }
 
 
+
+-- TEA structure for hooking this into larger programs
+
+
 {-| Create the Model from some starting state.
 -}
 init : s -> Model s x a
@@ -125,6 +129,12 @@ init s =
     , state = s
     }
         |> Registry
+
+
+type alias Protocol s x a msg =
+    { toMsg : Proc s x a -> msg
+    , onReturn : (s -> Result x a -> msg) -> msg
+    }
 
 
 {-| Provides the subscriptions needed to evaluate against the Model.
