@@ -3717,6 +3717,10 @@ var $author$project$Proc$mapBoth = F3(
 var $author$project$Proc$map = function (mf) {
 	return A2($author$project$Proc$mapBoth, mf, $elm$core$Basics$identity);
 };
+var $elm$time$Time$posixToMillis = function (_v0) {
+	var millis = _v0.a;
+	return millis;
+};
 var $author$project$Proc$modify = function (fn) {
 	return $author$project$Proc$Proc(
 		F2(
@@ -3725,10 +3729,6 @@ var $author$project$Proc$modify = function (fn) {
 					fn(s),
 					$author$project$Proc$POk(_Utils_Tuple0));
 			}));
-};
-var $elm$time$Time$posixToMillis = function (_v0) {
-	var millis = _v0.a;
-	return millis;
 };
 var $author$project$Main$push = function (msg) {
 	return $author$project$Proc$modify(
@@ -3741,50 +3741,30 @@ var $author$project$Main$push = function (msg) {
 		});
 };
 var $author$project$Main$example2 = A2(
-	$author$project$Proc$andThen,
-	function (_v2) {
-		return $author$project$Proc$modify(
-			function (state) {
-				return _Utils_update(
-					state,
-					{
-						messages: $elm$core$List$reverse(state.messages)
-					});
-			});
+	$author$project$Proc$map,
+	function (s) {
+		return A2($elm$core$Debug$log, 'state', s);
 	},
 	A2(
-		$author$project$Proc$map,
-		function (s) {
-			return A2($elm$core$Debug$log, 'state', s);
+		$author$project$Proc$andThen,
+		function (_v0) {
+			return $author$project$Proc$get;
 		},
 		A2(
 			$author$project$Proc$andThen,
-			function (_v1) {
-				return $author$project$Proc$get;
-			},
+			$author$project$Main$push,
 			A2(
-				$author$project$Proc$andThen,
-				$author$project$Main$push,
+				$author$project$Proc$map,
 				A2(
-					$author$project$Proc$andThen,
-					function (_v0) {
-						return $author$project$Proc$pure('success');
-					},
+					$elm$core$Basics$composeR,
+					$elm$time$Time$posixToMillis,
 					A2(
-						$author$project$Proc$andThen,
-						$author$project$Main$push,
-						A2(
-							$author$project$Proc$map,
-							A2(
-								$elm$core$Basics$composeR,
-								$elm$time$Time$posixToMillis,
-								A2(
-									$elm$core$Basics$composeR,
-									$elm$core$String$fromInt,
-									$elm$core$Debug$log('tick'))),
-							$author$project$Proc$accept(
-								$author$project$Proc$join(
-									$elm$time$Time$every(500))))))))));
+						$elm$core$Basics$composeR,
+						$elm$core$String$fromInt,
+						$elm$core$Debug$log('tick'))),
+				$author$project$Proc$accept(
+					$author$project$Proc$join(
+						$elm$time$Time$every(500)))))));
 var $author$project$Proc$Registry = function (a) {
 	return {$: 'Registry', a: a};
 };

@@ -47,17 +47,13 @@ example =
         |> Proc.andThen (\_ -> Proc.modify (\state -> { state | messages = List.reverse state.messages }))
 
 
-example2 : Proc.Proc Example String ()
+example2 : Proc.Proc Example String Example
 example2 =
-    Proc.join (Time.every 500)
-        |> Proc.accept
+    (Proc.join (Time.every 500) |> Proc.accept)
         |> Proc.map (Time.posixToMillis >> String.fromInt >> Debug.log "tick")
-        |> Proc.andThen push
-        |> Proc.andThen (\_ -> Proc.pure "success")
         |> Proc.andThen push
         |> Proc.andThen (\_ -> Proc.get)
         |> Proc.map (\s -> Debug.log "state" s)
-        |> Proc.andThen (\_ -> Proc.modify (\state -> { state | messages = List.reverse state.messages }))
 
 
 push : String -> Proc.Proc Example String ()
