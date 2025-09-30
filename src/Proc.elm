@@ -128,10 +128,11 @@ program flags initFn io =
             }
     in
     Platform.worker
-        { init = \_ -> update protocol io (initFn flags |> init)
-        , update = update protocol
-        , subscriptions = subscriptions protocol
-        }
+        --{ init = \_ -> update protocol io (initFn flags |> init)
+        --, update = update protocol
+        --, subscriptions = subscriptions protocol
+        --}
+        (Debug.todo "")
 
 
 
@@ -269,32 +270,34 @@ may produce errors.
 -}
 task : Task.Task x a -> Proc s x a
 task t =
-    (\s ->
-        ( s
-        , Task.attempt
-            (\r ->
-                case r of
-                    Ok x ->
-                        pure x
-
-                    Err e ->
-                        err e
-            )
-            t
-            |> PExecute
-        )
-    )
-        |> Proc
+    --(\s ->
+    --    ( s
+    --    , Task.attempt
+    --        (\r ->
+    --            case r of
+    --                Ok x ->
+    --                    pure x
+    --
+    --                Err e ->
+    --                    err e
+    --        )
+    --        t
+    --        |> PExecute
+    --    )
+    --)
+    --    |> Proc
+    Debug.todo ""
 
 
 {-| Turns a Cmd into a `Proc`, allowing an IO operation to be run that never produces errors.
 -}
 do : Cmd a -> Proc s x a
 do command =
-    (\s ->
-        ( s, Cmd.map pure command |> PExecute )
-    )
-        |> Proc
+    --(\s ->
+    --    ( s, Cmd.map pure command |> PExecute |> PMsg )
+    --)
+    --    |> Proc
+    Debug.todo ""
 
 
 {-| Convert `Result` into an `Proc`.
@@ -328,6 +331,22 @@ advance fn =
 -- Combinators for building imperative programs
 
 
+next : Proc s x a -> (Result x a -> Proc s x a) -> Proc f b a
+next (Proc proc) resultMapper =
+    --(\s ->
+    --    proc <|
+    --        \aResult ->
+    --            let
+    --                (Proc nextProcedure) =
+    --                    resultMapper aResult
+    --            in
+    --            nextProcedure s
+    --                << PExecute
+    --)
+    --    |> Proc
+    Debug.todo ""
+
+
 {-| Given an `Proc` allows a new `Proc` to be created based on its current value.
 
 This allows imperative operations to be chained together, when the subsequent operation
@@ -351,28 +370,29 @@ andThen mf (Proc io) =
                 )
 
             ( nextS, PMsg msg ) ->
-                case msg of
-                    PSubscribe generator subGenerator ->
-                        let
-                            mappedGen =
-                                generator >> andThen mf
-
-                            mappedSubGen =
-                                subGenerator >> Sub.map (andThen mf)
-                        in
-                        ( nextS
-                        , PSubscribe mappedGen mappedSubGen
-                        )
-
-                    PUnsubscribe channelId nextProc ->
-                        ( nextS
-                        , andThen mf nextProc |> PUnsubscribe channelId
-                        )
-
-                    PExecute command ->
-                        ( nextS
-                        , Cmd.map (\p -> andThen mf p) command |> PExecute
-                        )
+                --case msg of
+                --    PSubscribe generator subGenerator ->
+                --        let
+                --            mappedGen =
+                --                generator >> andThen mf
+                --
+                --            mappedSubGen =
+                --                subGenerator >> Sub.map (andThen mf)
+                --        in
+                --        ( nextS
+                --        , PSubscribe mappedGen mappedSubGen |> PMsg
+                --        )
+                --
+                --    PUnsubscribe channelId nextProc ->
+                --        ( nextS
+                --        , andThen mf nextProc |> PUnsubscribe channelId |> PMsg
+                --        )
+                --
+                --    PExecute command ->
+                --        ( nextS
+                --        , Cmd.map (\p -> andThen mf p) command |> PExecute |> PMsg
+                --        )
+                Debug.todo ""
     )
         |> Proc
 
@@ -408,28 +428,29 @@ onError ef (Proc io) =
                 stateFn nextS
 
             ( nextS, PMsg msg ) ->
-                case msg of
-                    PSubscribe generator subGenerator ->
-                        let
-                            mappedGen =
-                                generator >> onError ef
-
-                            mappedSubGen =
-                                subGenerator >> Sub.map (onError ef)
-                        in
-                        ( nextS
-                        , PSubscribe mappedGen mappedSubGen
-                        )
-
-                    PUnsubscribe channelId nextProc ->
-                        ( nextS
-                        , onError ef nextProc |> PUnsubscribe channelId
-                        )
-
-                    PExecute command ->
-                        ( nextS
-                        , Cmd.map (\p -> onError ef p) command |> PExecute
-                        )
+                --case msg of
+                --    PSubscribe generator subGenerator ->
+                --        let
+                --            mappedGen =
+                --                generator >> onError ef
+                --
+                --            mappedSubGen =
+                --                subGenerator >> Sub.map (onError ef)
+                --        in
+                --        ( nextS
+                --        , PSubscribe mappedGen mappedSubGen |> PMsg
+                --        )
+                --
+                --    PUnsubscribe channelId nextProc ->
+                --        ( nextS
+                --        , onError ef nextProc |> PUnsubscribe channelId |> PMsg
+                --        )
+                --
+                --    PExecute command ->
+                --        ( nextS
+                --        , Cmd.map (\p -> onError ef p) command |> PExecute |> PMsg
+                --        )
+                Debug.todo ""
     )
         |> Proc
 
@@ -449,28 +470,29 @@ mapBoth mf ef (Proc io) =
                 )
 
             ( nextS, PMsg msg ) ->
-                case msg of
-                    PSubscribe generator subGenerator ->
-                        let
-                            mappedGen =
-                                generator >> mapBoth mf ef
-
-                            mappedSubGen =
-                                subGenerator >> Sub.map (mapBoth mf ef)
-                        in
-                        ( nextS
-                        , PSubscribe mappedGen mappedSubGen
-                        )
-
-                    PUnsubscribe channelId nextProc ->
-                        ( nextS
-                        , mapBoth mf ef nextProc |> PUnsubscribe channelId
-                        )
-
-                    PExecute command ->
-                        ( nextS
-                        , PExecute (Cmd.map (mapBoth mf ef) command)
-                        )
+                --case msg of
+                --    PSubscribe generator subGenerator ->
+                --        let
+                --            mappedGen =
+                --                generator >> mapBoth mf ef
+                --
+                --            mappedSubGen =
+                --                subGenerator >> Sub.map (mapBoth mf ef)
+                --        in
+                --        ( nextS
+                --        , PSubscribe mappedGen mappedSubGen |> PMsg
+                --        )
+                --
+                --    PUnsubscribe channelId nextProc ->
+                --        ( nextS
+                --        , mapBoth mf ef nextProc |> PUnsubscribe channelId |> PMsg
+                --        )
+                --
+                --    PExecute command ->
+                --        ( nextS
+                --        , PExecute (Cmd.map (mapBoth mf ef) command) |> PMsg
+                --        )
+                Debug.todo ""
     )
         |> Proc
 
@@ -695,54 +717,38 @@ based on a predicate on the last item produced by the channel.
 -}
 acceptUntil : (a -> Bool) -> Channel s x a -> Proc s x a
 acceptUntil shouldUnsubscribe (Channel channel) =
-    (\s ->
-        let
-            requestCommandMsg : Int -> Proc s x a
-            requestCommandMsg channelId =
-                (\innerS ->
-                    ( innerS
-                    , channel.request (channelKey channelId)
-                        |> PExecute
-                    )
-                )
-                    |> Proc
-
-            subGenerator : Int -> Sub (Proc s x a)
-            subGenerator channelId =
-                (\aData ->
-                    if channel.shouldAccept (channelKey channelId) aData then
-                        (\innerS ->
-                            ( innerS
-                            , generateMsg channelId aData
-                            )
-                        )
-                            |> Proc
-
-                    else
-                        (\innerS ->
-                            ( innerS
-                            , POk aData
-                            )
-                        )
-                            |> Proc
-                )
-                    |> channel.subscription
-
-            generateMsg : Int -> a -> T s x a
-            generateMsg channelId aData =
-                if shouldUnsubscribe aData then
-                    PUnsubscribe
-                        channelId
-                        (pure aData)
-
-                else
-                    POk aData
-        in
-        ( s
-        , PSubscribe requestCommandMsg subGenerator
-        )
-    )
-        |> Proc
+    --(\s ->
+    --    let
+    --        requestCommandMsg : Int -> Msg
+    --        requestCommandMsg channelId =
+    --            channel.request (channelKey channelId)
+    --                |> PExecute
+    --
+    --        subGenerator : Int -> Sub Msg
+    --        subGenerator channelId =
+    --            (\aData ->
+    --                if channel.shouldAccept (channelKey channelId) aData then
+    --                    generateMsg channelId aData
+    --
+    --                else
+    --                    POk aData
+    --            )
+    --                |> channel.subscription
+    --
+    --        generateMsg : Int -> a -> T s x a
+    --        generateMsg channelId aData =
+    --            if shouldUnsubscribe aData then
+    --                PUnsubscribe channelId (pure aData) |> PMsg
+    --
+    --            else
+    --                POk aData
+    --    in
+    --    ( s
+    --    , PSubscribe requestCommandMsg subGenerator |> PMsg
+    --    )
+    --)
+    --    |> Proc
+    Debug.todo ""
 
 
 channelKey : Int -> String
