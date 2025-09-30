@@ -1,5 +1,6 @@
 module Proc exposing
-    ( Proc
+    ( return
+    , Proc
     , Program, program
     , Model, Protocol, init, subscriptions, update, run
     , pure, err, result, task, do, advance
@@ -10,12 +11,12 @@ module Proc exposing
     , Channel, ChannelRequest
     , join, open, connect, filter
     , accept, acceptOne, acceptUntil
-    , return
     )
 
 {-| Proc provides a structure that combines 3 things; `Result`, `Procedure` and the
 state monad. This helps you do stateful programming with IO and error handling.
 
+@docs return
 @docs Proc
 
 
@@ -66,7 +67,9 @@ import Dict exposing (Dict)
 import Task exposing (Task)
 
 
-return : Proc s x a -> Proc s x a
+{-| Terminates the Proc and triggers an onReturn event.
+-}
+return : Proc s x a -> Proc s x Never
 return proc =
     Debug.todo "return"
 
@@ -92,8 +95,7 @@ type Proc s x a
 
 
 type T s x a
-    = PTask (Task.Task x (Proc s x a))
-    | POk a
+    = POk a
     | PErr x
     | PSubscribe (Int -> Proc s x a) (Int -> Sub (Proc s x a))
     | PUnsubscribe Int (Proc s x a)
@@ -181,21 +183,6 @@ update protocol (Proc io) (Registry reg) =
             { innerReg | channels = Dict.remove channelId innerReg.channels }
     in
     case io reg.state |> Debug.log "Proc.update" of
-        ( nextS, PTask t ) ->
-            ( { reg | state = nextS } |> Registry
-            , Task.attempt
-                (\r ->
-                    case r of
-                        Ok x ->
-                            x
-
-                        Err e ->
-                            err e
-                )
-                t
-            )
-                |> protocol.onUpdate
-
         ( nextS, POk x ) ->
             ( { reg | state = nextS } |> Registry
             , Cmd.none
@@ -275,7 +262,21 @@ may produce errors.
 -}
 task : Task.Task x a -> Proc s x a
 task t =
-    (\s -> ( s, t |> Task.map pure |> PTask ))
+    (\s ->
+        ( s
+        , Task.attempt
+            (\r ->
+                case r of
+                    Ok x ->
+                        pure x
+
+                    Err e ->
+                        err e
+            )
+            t
+            |> PExecute
+        )
+    )
         |> Proc
 
 
@@ -330,12 +331,6 @@ andThen : (a -> Proc s x b) -> Proc s x a -> Proc s x b
 andThen mf (Proc io) =
     (\s ->
         case io s of
-            ( nextS, PTask t ) ->
-                ( nextS
-                , Task.andThen (\inner -> Task.succeed (andThen mf inner)) t
-                    |> PTask
-                )
-
             ( nextS, POk x ) ->
                 let
                     (Proc stateFn) =
@@ -393,14 +388,6 @@ onError : (x -> Proc s y a) -> Proc s x a -> Proc s y a
 onError ef (Proc io) =
     (\s ->
         case io s of
-            ( nextS, PTask t ) ->
-                ( nextS
-                , Task.onError
-                    (\e -> ef e |> Task.succeed)
-                    (t |> Task.map (onError ef))
-                    |> PTask
-                )
-
             ( nextS, POk x ) ->
                 ( nextS, POk x )
 
@@ -440,14 +427,6 @@ mapBoth : (a -> b) -> (x -> y) -> Proc s x a -> Proc s y b
 mapBoth mf ef (Proc io) =
     (\s ->
         case io s of
-            ( nextS, PTask t ) ->
-                ( nextS
-                , t
-                    |> Task.andThen (\inner -> Task.succeed (mapBoth mf ef inner))
-                    |> Task.onError (\inner -> Task.fail (ef inner))
-                    |> PTask
-                )
-
             ( nextS, POk x ) ->
                 ( nextS
                 , mf x |> POk

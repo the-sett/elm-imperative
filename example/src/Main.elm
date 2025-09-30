@@ -114,7 +114,7 @@ example =
         |> Proc.andThen (\_ -> Proc.get)
 
 
-example2 : Int -> Proc.Proc State String State
+example2 : Int -> Proc.Proc State String Never
 example2 n =
     if n == 0 then
         Proc.get
