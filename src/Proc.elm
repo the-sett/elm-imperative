@@ -80,10 +80,10 @@ return proc =
 
 {-| Internal state that is needed to evaluate a Proc.
 -}
-type Model s x a
+type Model s
     = Registry
         { nextId : Int
-        , channels : Dict Int (Sub (Proc s x a))
+        , channels : Dict Int (Sub Msg)
         , state : s
         }
 
@@ -97,9 +97,13 @@ type Proc s x a
 type T s x a
     = POk a
     | PErr x
-    | PSubscribe (Int -> Proc s x a) (Int -> Sub (Proc s x a))
-    | PUnsubscribe Int (Proc s x a)
-    | PExecute (Cmd (Proc s x a))
+    | PMsg Msg
+
+
+type Msg
+    = PSubscribe (Int -> Msg) (Int -> Sub Msg)
+    | PUnsubscribe Int Msg
+    | PExecute (Cmd Msg)
 
 
 
@@ -108,13 +112,13 @@ type T s x a
 
 {-| Imperative Elm programs.
 -}
-type alias Program flags s x a =
-    Platform.Program flags (Model s x a) (Proc s x a)
+type alias Program flags s =
+    Platform.Program flags (Model s) Msg
 
 
 {-| Builds an imperative program from flags, an initial model and an imperative program structure.
 -}
-program : flags -> (flags -> s) -> Proc s x a -> Program flags s x a
+program : flags -> (flags -> s) -> Proc s x a -> Program flags s
 program flags initFn io =
     let
         protocol =
@@ -141,15 +145,16 @@ A Proc will typically do a normal 'onUpdate' many times and terminate with a sin
 
 -}
 type alias Protocol s x a submodel msg model =
-    { toMsg : Proc s x a -> msg
-    , onUpdate : ( submodel, Cmd (Proc s x a) ) -> ( model, Cmd msg )
-    , onReturn : s -> Result x a -> ( submodel, Cmd (Proc s x a) ) -> ( model, Cmd msg )
+    { toMsg : Msg -> msg
+    , onUpdate : ( submodel, Cmd Msg ) -> ( model, Cmd msg )
+    , onReturn : s -> a -> ( submodel, Cmd Msg ) -> ( model, Cmd msg )
+    , onThrow : s -> x -> ( submodel, Cmd Msg ) -> ( model, Cmd msg )
     }
 
 
 {-| Create the Model from some starting state.
 -}
-init : s -> Model s x a
+init : s -> Model s
 init s =
     { nextId = 0
     , channels = Dict.empty
@@ -160,7 +165,7 @@ init s =
 
 {-| Provides the subscriptions needed to evaluate against the Model.
 -}
-subscriptions : Protocol s x a (Model s x a) msg model -> Model s x a -> Sub msg
+subscriptions : Protocol s x a (Model s) msg model -> Model s -> Sub msg
 subscriptions protocol (Registry reg) =
     Dict.values reg.channels
         |> Sub.batch
@@ -170,7 +175,7 @@ subscriptions protocol (Registry reg) =
 {-| Evalulates a Proc against a Model, producing a new model and some Cmds until the Proc is fully evaluated
 and terminates.
 -}
-update : Protocol s x a (Model s x a) msg model -> Proc s x a -> Model s x a -> ( model, Cmd msg )
+update : Protocol s x a (Model s) msg model -> Proc s x a -> Model s -> ( model, Cmd msg )
 update protocol (Proc io) (Registry reg) =
     let
         addChannel subGenerator innerReg =
@@ -195,33 +200,35 @@ update protocol (Proc io) (Registry reg) =
             )
                 |> protocol.onUpdate
 
-        ( nextS, PSubscribe messageGenerator subGenerator ) ->
-            let
-                nextReg =
-                    addChannel subGenerator reg
-            in
-            ( { nextReg | state = nextS } |> Registry
-            , messageGenerator reg.nextId
-                -- reg.nextId is correct here. nextReg.nextId contains the bumped value for the next subscription.
-                |> sendMessage
-            )
-                |> protocol.onUpdate
+        ( nextS, PMsg msg ) ->
+            case msg of
+                PSubscribe messageGenerator subGenerator ->
+                    let
+                        nextReg =
+                            addChannel subGenerator reg
+                    in
+                    ( { nextReg | state = nextS } |> Registry
+                    , messageGenerator reg.nextId
+                        -- reg.nextId is correct here. nextReg.nextId contains the bumped value for the next subscription.
+                        |> sendMessage
+                    )
+                        |> protocol.onUpdate
 
-        ( nextS, PUnsubscribe channelId nextMessage ) ->
-            let
-                nextReg =
-                    deleteChannel channelId reg
-            in
-            ( { nextReg | state = nextS } |> Registry
-            , sendMessage nextMessage
-            )
-                |> protocol.onUpdate
+                PUnsubscribe channelId nextMessage ->
+                    let
+                        nextReg =
+                            deleteChannel channelId reg
+                    in
+                    ( { nextReg | state = nextS } |> Registry
+                    , sendMessage nextMessage
+                    )
+                        |> protocol.onUpdate
 
-        ( nextS, PExecute cmd ) ->
-            ( { reg | state = nextS } |> Registry
-            , cmd
-            )
-                |> protocol.onUpdate
+                PExecute cmd ->
+                    ( { reg | state = nextS } |> Registry
+                    , cmd
+                    )
+                        |> protocol.onUpdate
 
 
 sendMessage : msg -> Cmd msg
@@ -343,27 +350,29 @@ andThen mf (Proc io) =
                 , PErr e
                 )
 
-            ( nextS, PSubscribe generator subGenerator ) ->
-                let
-                    mappedGen =
-                        generator >> andThen mf
+            ( nextS, PMsg msg ) ->
+                case msg of
+                    PSubscribe generator subGenerator ->
+                        let
+                            mappedGen =
+                                generator >> andThen mf
 
-                    mappedSubGen =
-                        subGenerator >> Sub.map (andThen mf)
-                in
-                ( nextS
-                , PSubscribe mappedGen mappedSubGen
-                )
+                            mappedSubGen =
+                                subGenerator >> Sub.map (andThen mf)
+                        in
+                        ( nextS
+                        , PSubscribe mappedGen mappedSubGen
+                        )
 
-            ( nextS, PUnsubscribe channelId nextProc ) ->
-                ( nextS
-                , andThen mf nextProc |> PUnsubscribe channelId
-                )
+                    PUnsubscribe channelId nextProc ->
+                        ( nextS
+                        , andThen mf nextProc |> PUnsubscribe channelId
+                        )
 
-            ( nextS, PExecute command ) ->
-                ( nextS
-                , Cmd.map (\p -> andThen mf p) command |> PExecute
-                )
+                    PExecute command ->
+                        ( nextS
+                        , Cmd.map (\p -> andThen mf p) command |> PExecute
+                        )
     )
         |> Proc
 
@@ -398,27 +407,29 @@ onError ef (Proc io) =
                 in
                 stateFn nextS
 
-            ( nextS, PSubscribe generator subGenerator ) ->
-                let
-                    mappedGen =
-                        generator >> onError ef
+            ( nextS, PMsg msg ) ->
+                case msg of
+                    PSubscribe generator subGenerator ->
+                        let
+                            mappedGen =
+                                generator >> onError ef
 
-                    mappedSubGen =
-                        subGenerator >> Sub.map (onError ef)
-                in
-                ( nextS
-                , PSubscribe mappedGen mappedSubGen
-                )
+                            mappedSubGen =
+                                subGenerator >> Sub.map (onError ef)
+                        in
+                        ( nextS
+                        , PSubscribe mappedGen mappedSubGen
+                        )
 
-            ( nextS, PUnsubscribe channelId nextProc ) ->
-                ( nextS
-                , onError ef nextProc |> PUnsubscribe channelId
-                )
+                    PUnsubscribe channelId nextProc ->
+                        ( nextS
+                        , onError ef nextProc |> PUnsubscribe channelId
+                        )
 
-            ( nextS, PExecute command ) ->
-                ( nextS
-                , Cmd.map (\p -> onError ef p) command |> PExecute
-                )
+                    PExecute command ->
+                        ( nextS
+                        , Cmd.map (\p -> onError ef p) command |> PExecute
+                        )
     )
         |> Proc
 
@@ -437,27 +448,29 @@ mapBoth mf ef (Proc io) =
                 , ef e |> PErr
                 )
 
-            ( nextS, PSubscribe generator subGenerator ) ->
-                let
-                    mappedGen =
-                        generator >> mapBoth mf ef
+            ( nextS, PMsg msg ) ->
+                case msg of
+                    PSubscribe generator subGenerator ->
+                        let
+                            mappedGen =
+                                generator >> mapBoth mf ef
 
-                    mappedSubGen =
-                        subGenerator >> Sub.map (mapBoth mf ef)
-                in
-                ( nextS
-                , PSubscribe mappedGen mappedSubGen
-                )
+                            mappedSubGen =
+                                subGenerator >> Sub.map (mapBoth mf ef)
+                        in
+                        ( nextS
+                        , PSubscribe mappedGen mappedSubGen
+                        )
 
-            ( nextS, PUnsubscribe channelId nextProc ) ->
-                ( nextS
-                , mapBoth mf ef nextProc |> PUnsubscribe channelId
-                )
+                    PUnsubscribe channelId nextProc ->
+                        ( nextS
+                        , mapBoth mf ef nextProc |> PUnsubscribe channelId
+                        )
 
-            ( nextS, PExecute command ) ->
-                ( nextS
-                , PExecute (Cmd.map (mapBoth mf ef) command)
-                )
+                    PExecute command ->
+                        ( nextS
+                        , PExecute (Cmd.map (mapBoth mf ef) command)
+                        )
     )
         |> Proc
 
