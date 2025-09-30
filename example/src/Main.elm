@@ -6,7 +6,7 @@ import Time
 
 
 type alias Model =
-    { procModel : Proc.Model State String State
+    { procModel : Proc.Model State
     }
 
 
@@ -14,7 +14,7 @@ type Msg
     = ProcMsg (Proc.Proc State String State)
 
 
-protocol : Model -> Proc.Protocol State String State (Proc.Model State String State) Msg Model
+protocol : Model -> Proc.Protocol State String State (Proc.Model State) Msg Model
 protocol model =
     { toMsg = ProcMsg
     , onUpdate = Tuple.mapBoth (\pm -> { model | procModel = pm }) (Cmd.map ProcMsg)
