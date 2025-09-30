@@ -66,6 +66,11 @@ import Dict exposing (Dict)
 import Task exposing (Task)
 
 
+return : Proc s x a -> Proc s x a
+return proc =
+    Debug.todo "return"
+
+
 
 -- The imperative structure
 
@@ -93,7 +98,6 @@ type T s x a
     | PSubscribe (Int -> Proc s x a) (Int -> Sub (Proc s x a))
     | PUnsubscribe Int (Proc s x a)
     | PExecute (Cmd (Proc s x a))
-    | PReturn a
 
 
 
@@ -232,12 +236,6 @@ update protocol (Proc io) (Registry reg) =
             )
                 |> protocol.onUpdate
 
-        ( nextS, PReturn x ) ->
-            ( reg |> Registry
-            , Cmd.none
-            )
-                |> protocol.onReturn nextS (Ok x)
-
 
 sendMessage : msg -> Cmd msg
 sendMessage msg =
@@ -318,18 +316,6 @@ advance fn =
         |> Proc
 
 
-return : Proc s x a -> Proc s x a
-return proc =
-    proc
-        |> andThen
-            (\a ->
-                (\s ->
-                    ( s, PReturn a )
-                )
-                    |> Proc
-            )
-
-
 
 -- Combinators for building imperative programs
 
@@ -383,13 +369,6 @@ andThen mf (Proc io) =
                 ( nextS
                 , Cmd.map (\p -> andThen mf p) command |> PExecute
                 )
-
-            ( nextS, PReturn x ) ->
-                let
-                    (Proc stateFn) =
-                        mf x
-                in
-                stateFn nextS
     )
         |> Proc
 
@@ -453,9 +432,6 @@ onError ef (Proc io) =
                 ( nextS
                 , Cmd.map (\p -> onError ef p) command |> PExecute
                 )
-
-            ( nextS, PReturn x ) ->
-                ( nextS, PReturn x )
     )
         |> Proc
 
@@ -502,11 +478,6 @@ mapBoth mf ef (Proc io) =
             ( nextS, PExecute command ) ->
                 ( nextS
                 , PExecute (Cmd.map (mapBoth mf ef) command)
-                )
-
-            ( nextS, PReturn x ) ->
-                ( nextS
-                , mf x |> PReturn
                 )
     )
         |> Proc
