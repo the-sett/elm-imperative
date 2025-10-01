@@ -641,6 +641,18 @@ sequence ios =
 
 
 -- Channel
+-- Each channel represents a single request to Cmd+Sub pair. Multiple requests sets up multiple Subs, which then
+-- need to be filtered on the channel key, which is not scalable.
+--
+-- Conceptually this needs to shift so that each Channel represents a Cmd+Sub pair, but not any particular request
+-- to it. There must be a separate function to create the request with a fresh id. When a response comes into the
+-- Sub, the matching Proc based on request id must then be continued.
+--
+-- Channels should have some kind of unique identifier per Sub. There also needs to be a way to scan all the active
+-- requests to find out which Subs are still active, in order to return them in `subscriptions`.
+--
+-- This will allow Subs to be used efficiently, with 1 Sub servicing many concurrent requests, and all the responses
+-- resolving correctly against the requests that created them by unique id.
 
 
 {-| A channel represents a source of events that can be polled off the channel as a Proc.
