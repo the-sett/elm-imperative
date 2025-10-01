@@ -2,7 +2,7 @@ module Proc exposing
     ( return
     , Proc
     , Program, program
-    , Model, Protocol, init, subscriptions, update, run
+    , Model, Msg, Protocol, init, subscriptions, update, run
     , pure, err, result, task, do, advance
     , andThen, andMap, onError, map
     , map2, map3, map4, map5, map6
@@ -27,7 +27,7 @@ state monad. This helps you do stateful programming with IO and error handling.
 
 # TEA structure for hooking this into larger programs
 
-@docs Model, Protocol, init, subscriptions, update, run
+@docs Model, Msg, Protocol, init, subscriptions, update, run
 
 
 # Constructors
@@ -80,11 +80,10 @@ return proc =
 
 {-| Internal state that is needed to evaluate a Proc.
 -}
-type Model s
+type Model
     = Registry
         { nextId : Int
         , channels : Dict Int (Sub Msg)
-        , state : s
         }
 
 
@@ -100,6 +99,8 @@ type T s x a
     | PMsg Msg
 
 
+{-| Internal events used to evaluate Procs.
+-}
 type Msg
     = PSubscribe (Int -> Msg) (Int -> Sub Msg)
     | PUnsubscribe Int Msg
@@ -112,13 +113,13 @@ type Msg
 
 {-| Imperative Elm programs.
 -}
-type alias Program flags s =
-    Platform.Program flags (Model s) Msg
+type alias Program flags =
+    Platform.Program flags Model Msg
 
 
 {-| Builds an imperative program from flags, an initial model and an imperative program structure.
 -}
-program : flags -> (flags -> s) -> Proc s x a -> Program flags s
+program : flags -> (flags -> s) -> Proc s x a -> Program flags
 program flags initFn io =
     let
         protocol =
@@ -155,18 +156,17 @@ type alias Protocol s x a submodel msg model =
 
 {-| Create the Model from some starting state.
 -}
-init : s -> Model s
-init s =
+init : Model
+init =
     { nextId = 0
     , channels = Dict.empty
-    , state = s
     }
         |> Registry
 
 
 {-| Provides the subscriptions needed to evaluate against the Model.
 -}
-subscriptions : Protocol s x a (Model s) msg model -> Model s -> Sub msg
+subscriptions : Protocol s x a Model msg model -> Model -> Sub msg
 subscriptions protocol (Registry reg) =
     Dict.values reg.channels
         |> Sub.batch
@@ -176,60 +176,67 @@ subscriptions protocol (Registry reg) =
 {-| Evalulates a Proc against a Model, producing a new model and some Cmds until the Proc is fully evaluated
 and terminates.
 -}
-update : Protocol s x a (Model s) msg model -> Proc s x a -> Model s -> ( model, Cmd msg )
-update protocol (Proc io) (Registry reg) =
-    let
-        addChannel subGenerator innerReg =
-            { innerReg
-                | nextId = innerReg.nextId + 1
-                , channels = Dict.insert innerReg.nextId (subGenerator innerReg.nextId) innerReg.channels
-            }
 
-        deleteChannel channelId innerReg =
-            { innerReg | channels = Dict.remove channelId innerReg.channels }
-    in
-    case io reg.state |> Debug.log "Proc.update" of
-        ( nextS, POk x ) ->
-            ( { reg | state = nextS } |> Registry
-            , Cmd.none
-            )
-                |> protocol.onUpdate
 
-        ( nextS, PErr e ) ->
-            ( { reg | state = nextS } |> Registry
-            , Cmd.none
-            )
-                |> protocol.onUpdate
 
-        ( nextS, PMsg msg ) ->
-            case msg of
-                PSubscribe messageGenerator subGenerator ->
-                    let
-                        nextReg =
-                            addChannel subGenerator reg
-                    in
-                    ( { nextReg | state = nextS } |> Registry
-                    , messageGenerator reg.nextId
-                        -- reg.nextId is correct here. nextReg.nextId contains the bumped value for the next subscription.
-                        |> sendMessage
-                    )
-                        |> protocol.onUpdate
+--update : Protocol s x a (Model) msg model -> Proc s x a -> Model -> ( model, Cmd msg )
 
-                PUnsubscribe channelId nextMessage ->
-                    let
-                        nextReg =
-                            deleteChannel channelId reg
-                    in
-                    ( { nextReg | state = nextS } |> Registry
-                    , sendMessage nextMessage
-                    )
-                        |> protocol.onUpdate
 
-                PExecute cmd ->
-                    ( { reg | state = nextS } |> Registry
-                    , cmd
-                    )
-                        |> protocol.onUpdate
+update : Protocol s x a Model msg model -> Msg -> Model -> ( model, Cmd msg )
+update protocol msg (Registry reg) =
+    --let
+    --    addChannel subGenerator innerReg =
+    --        { innerReg
+    --            | nextId = innerReg.nextId + 1
+    --            , channels = Dict.insert innerReg.nextId (subGenerator innerReg.nextId) innerReg.channels
+    --        }
+    --
+    --    deleteChannel channelId innerReg =
+    --        { innerReg | channels = Dict.remove channelId innerReg.channels }
+    --in
+    --case io reg.state |> Debug.log "Proc.update" of
+    --    ( nextS, POk x ) ->
+    --        ( { reg | state = nextS } |> Registry
+    --        , Cmd.none
+    --        )
+    --            |> protocol.onUpdate
+    --
+    --    ( nextS, PErr e ) ->
+    --        ( { reg | state = nextS } |> Registry
+    --        , Cmd.none
+    --        )
+    --            |> protocol.onUpdate
+    --
+    --    ( nextS, PMsg msg ) ->
+    --        case msg of
+    --            PSubscribe messageGenerator subGenerator ->
+    --                let
+    --                    nextReg =
+    --                        addChannel subGenerator reg
+    --                in
+    --                ( { nextReg | state = nextS } |> Registry
+    --                , messageGenerator reg.nextId
+    --                    -- reg.nextId is correct here. nextReg.nextId contains the bumped value for the next subscription.
+    --                    |> sendMessage
+    --                )
+    --                    |> protocol.onUpdate
+    --
+    --            PUnsubscribe channelId nextMessage ->
+    --                let
+    --                    nextReg =
+    --                        deleteChannel channelId reg
+    --                in
+    --                ( { nextReg | state = nextS } |> Registry
+    --                , sendMessage nextMessage
+    --                )
+    --                    |> protocol.onUpdate
+    --
+    --            PExecute cmd ->
+    --                ( { reg | state = nextS } |> Registry
+    --                , cmd
+    --                )
+    --                    |> protocol.onUpdate
+    Debug.todo ""
 
 
 sendMessage : msg -> Cmd msg
@@ -239,9 +246,11 @@ sendMessage msg =
 
 {-| Given a Proc starts it running.
 -}
-run : (Proc s x a -> msg) -> Proc s x a -> Cmd msg
-run toMsg proc =
-    Task.succeed proc |> Task.perform toMsg
+run : Protocol s x a submodel msg model -> Proc s x a -> s -> Cmd msg
+run protocol proc =
+    --Task.succeed (\s -> proc s)
+    --    |> Task.perform protocol.toMsg
+    Debug.todo ""
 
 
 
@@ -331,20 +340,32 @@ advance fn =
 -- Combinators for building imperative programs
 
 
-next : Proc s x a -> (Result x a -> Proc s x a) -> Proc f b a
+next : Proc s x a -> (Result x a -> Proc s f b) -> Proc s f b
 next (Proc proc) resultMapper =
-    --(\s ->
-    --    proc <|
-    --        \aResult ->
-    --            let
-    --                (Proc nextProcedure) =
-    --                    resultMapper aResult
-    --            in
-    --            nextProcedure s
-    --                << PExecute
-    --)
-    --    |> Proc
-    Debug.todo ""
+    (\s ->
+        --    proc <|
+        --        \aResult ->
+        --            let
+        --                (Proc nextProcedure) =
+        --                    resultMapper aResult
+        --            in
+        --            nextProcedure s
+        --                << PExecute
+        let
+            ( nextS, t ) =
+                proc s
+        in
+        case t of
+            POk x ->
+                Debug.todo ""
+
+            PErr _ ->
+                Debug.todo ""
+
+            PMsg _ ->
+                Debug.todo ""
+    )
+        |> Proc
 
 
 {-| Given an `Proc` allows a new `Proc` to be created based on its current value.
