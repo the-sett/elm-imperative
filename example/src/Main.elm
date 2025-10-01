@@ -6,19 +6,26 @@ import Time
 
 
 type alias Model =
-    { procModel : Proc.Model State
+    { procModel : Proc.Model
     }
 
 
 type Msg
-    = ProcMsg (Proc.Proc State String State)
+    = ProcMsg Proc.Msg
 
 
-protocol : Model -> Proc.Protocol State String State (Proc.Model State) Msg Model
+protocol : Model -> Proc.Protocol State String State Proc.Model Msg Model
 protocol model =
     { toMsg = ProcMsg
     , onUpdate = Tuple.mapBoth (\pm -> { model | procModel = pm }) (Cmd.map ProcMsg)
     , onReturn =
+        \s res ( pm, _ ) ->
+            let
+                _ =
+                    Debug.log "Returned" { state = s, result = res }
+            in
+            ( { model | procModel = pm }, Cmd.none )
+    , onThrow =
         \s res ( pm, _ ) ->
             let
                 _ =
@@ -43,11 +50,15 @@ init _ =
         exampleProc =
             example
 
-        --example2 5
+        initModel =
+            { procModel = Proc.init
+            }
+
+        initState =
+            { messages = [ "initial" ] }
     in
-    ( { procModel = Proc.init { messages = [ "initial" ] }
-      }
-    , Proc.run ProcMsg exampleProc
+    ( initModel
+    , Proc.run (protocol initModel) exampleProc initState
     )
 
 
