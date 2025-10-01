@@ -2,7 +2,7 @@ module Proc exposing
     ( return
     , Proc
     , Program, program
-    , Model, Protocol, init, subscriptions, update, run
+    , Model, Msg, Protocol, init, subscriptions, update, run
     , pure, err, result, task, do, advance
     , andThen, andMap, onError, map
     , map2, map3, map4, map5, map6
@@ -11,7 +11,6 @@ module Proc exposing
     , Channel, ChannelRequest
     , join, open, connect, filter
     , accept, acceptOne, acceptUntil
-    , Msg
     )
 
 {-| Proc provides a structure that combines 3 things; `Result`, `Procedure` and the
@@ -28,7 +27,7 @@ state monad. This helps you do stateful programming with IO and error handling.
 
 # TEA structure for hooking this into larger programs
 
-@docs Model, Protocol, init, subscriptions, update, run
+@docs Model, Msg, Protocol, init, subscriptions, update, run
 
 
 # Constructors
@@ -100,6 +99,8 @@ type T s x a
     | PMsg Msg
 
 
+{-| Internal events used to evaluate Procs.
+-}
 type Msg
     = PSubscribe (Int -> Msg) (Int -> Sub Msg)
     | PUnsubscribe Int Msg
@@ -339,20 +340,32 @@ advance fn =
 -- Combinators for building imperative programs
 
 
-next : Proc s x a -> (Result x a -> Proc s x a) -> Proc f b a
+next : Proc s x a -> (Result x a -> Proc s f b) -> Proc s f b
 next (Proc proc) resultMapper =
-    --(\s ->
-    --    proc <|
-    --        \aResult ->
-    --            let
-    --                (Proc nextProcedure) =
-    --                    resultMapper aResult
-    --            in
-    --            nextProcedure s
-    --                << PExecute
-    --)
-    --    |> Proc
-    Debug.todo ""
+    (\s ->
+        --    proc <|
+        --        \aResult ->
+        --            let
+        --                (Proc nextProcedure) =
+        --                    resultMapper aResult
+        --            in
+        --            nextProcedure s
+        --                << PExecute
+        let
+            ( nextS, t ) =
+                proc s
+        in
+        case t of
+            POk x ->
+                Debug.todo ""
+
+            PErr _ ->
+                Debug.todo ""
+
+            PMsg _ ->
+                Debug.todo ""
+    )
+        |> Proc
 
 
 {-| Given an `Proc` allows a new `Proc` to be created based on its current value.
