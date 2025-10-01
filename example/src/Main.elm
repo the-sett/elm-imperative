@@ -7,6 +7,7 @@ import Time
 
 type alias Model =
     { procModel : Proc.Model
+    , state : State
     }
 
 
@@ -14,7 +15,7 @@ type Msg
     = ProcMsg Proc.Msg
 
 
-protocol : Model -> Proc.Protocol State String State Proc.Model Msg Model
+protocol : Model -> Proc.Protocol State String State Msg Model
 protocol model =
     { toMsg = ProcMsg
     , onUpdate = Tuple.mapBoth (\pm -> { model | procModel = pm }) (Cmd.map ProcMsg)
@@ -50,15 +51,21 @@ init _ =
         exampleProc =
             example
 
-        initModel =
-            { procModel = Proc.init
-            }
-
         initState =
             { messages = [ "initial" ] }
+
+        initModel =
+            { procModel = Proc.init
+            , state = { messages = [ "initial" ] }
+            }
+
+        ( nextState, cmd ) =
+            Proc.run (protocol initModel) exampleProc initState
     in
-    ( initModel
-    , Proc.run (protocol initModel) exampleProc initState
+    ( { procModel = Proc.init
+      , state = nextState
+      }
+    , cmd
     )
 
 
@@ -66,7 +73,13 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg |> Debug.log "Main.update" of
         ProcMsg proc ->
-            Proc.update (protocol model) proc model.procModel
+            let
+                ( nextState, nextModel, cmd ) =
+                    Proc.update (protocol model) proc model.procModel model.state
+            in
+            ( { nextModel | state = nextState }
+            , cmd
+            )
 
 
 subscriptions : Model -> Sub Msg

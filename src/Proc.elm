@@ -105,6 +105,7 @@ type Msg
     = PSubscribe (Int -> Msg) (Int -> Sub Msg)
     | PUnsubscribe Int Msg
     | PExecute (Cmd Msg)
+    | PCont
 
 
 
@@ -146,11 +147,11 @@ a Proc and for lifting them into a parent update loop.
 A Proc will typically do a normal 'onUpdate' many times and terminate with a single `onReturn`.
 
 -}
-type alias Protocol s x a submodel msg model =
+type alias Protocol s x a msg model =
     { toMsg : Msg -> msg
-    , onUpdate : ( submodel, Cmd Msg ) -> ( model, Cmd msg )
-    , onReturn : s -> a -> ( submodel, Cmd Msg ) -> ( model, Cmd msg )
-    , onThrow : s -> x -> ( submodel, Cmd Msg ) -> ( model, Cmd msg )
+    , onUpdate : ( s, Model, Cmd Msg ) -> ( model, Cmd msg )
+    , onReturn : a -> ( s, Model, Cmd Msg ) -> ( model, Cmd msg )
+    , onThrow : x -> ( s, Model, Cmd Msg ) -> ( model, Cmd msg )
     }
 
 
@@ -166,7 +167,7 @@ init =
 
 {-| Provides the subscriptions needed to evaluate against the Model.
 -}
-subscriptions : Protocol s x a Model msg model -> Model -> Sub msg
+subscriptions : Protocol s x a msg model -> Model -> Sub msg
 subscriptions protocol (Registry reg) =
     Dict.values reg.channels
         |> Sub.batch
@@ -182,7 +183,7 @@ and terminates.
 --update : Protocol s x a (Model) msg model -> Proc s x a -> Model -> ( model, Cmd msg )
 
 
-update : Protocol s x a Model msg model -> Msg -> Model -> ( model, Cmd msg )
+update : Protocol s x a msg model -> Msg -> Model -> s -> ( s, model, Cmd msg )
 update protocol msg (Registry reg) =
     --let
     --    addChannel subGenerator innerReg =
@@ -246,11 +247,17 @@ sendMessage msg =
 
 {-| Given a Proc starts it running.
 -}
-run : Protocol s x a submodel msg model -> Proc s x a -> s -> Cmd msg
-run protocol proc =
-    --Task.succeed (\s -> proc s)
-    --    |> Task.perform protocol.toMsg
-    Debug.todo ""
+run : Protocol s x a msg model -> Proc s x a -> s -> ( s, Cmd msg )
+run protocol (Proc proc) s =
+    case proc s of
+        ( innerS, POk _ ) ->
+            ( innerS, protocol.toMsg PCont |> sendMessage )
+
+        ( innerS, PErr _ ) ->
+            ( innerS, protocol.toMsg PCont |> sendMessage )
+
+        ( innerS, PMsg msg ) ->
+            ( innerS, protocol.toMsg msg |> sendMessage )
 
 
 
