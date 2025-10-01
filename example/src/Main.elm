@@ -73,13 +73,7 @@ update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg |> Debug.log "Main.update" of
         ProcMsg proc ->
-            let
-                ( nextState, nextModel, cmd ) =
-                    Proc.update (protocol model) proc model.procModel model.state
-            in
-            ( { nextModel | state = nextState }
-            , cmd
-            )
+            Proc.update (protocol model) proc model.procModel model.state
 
 
 subscriptions : Model -> Sub Msg

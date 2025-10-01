@@ -177,67 +177,50 @@ subscriptions protocol (Registry reg) =
 {-| Evalulates a Proc against a Model, producing a new model and some Cmds until the Proc is fully evaluated
 and terminates.
 -}
+update : Protocol s x a msg model -> Msg -> Model -> s -> ( model, Cmd msg )
+update protocol msg (Registry reg) s =
+    let
+        addChannel subGenerator innerReg =
+            { innerReg
+                | nextId = innerReg.nextId + 1
+                , channels = Dict.insert innerReg.nextId (subGenerator innerReg.nextId) innerReg.channels
+            }
 
+        deleteChannel channelId innerReg =
+            { innerReg | channels = Dict.remove channelId innerReg.channels }
+    in
+    case msg of
+        PSubscribe messageGenerator subGenerator ->
+            let
+                nextReg =
+                    addChannel subGenerator reg
+            in
+            ( s
+            , nextReg |> Registry
+            , messageGenerator reg.nextId
+                -- reg.nextId is correct here. nextReg.nextId contains the bumped value for the next subscription.
+                |> sendMessage
+            )
+                |> protocol.onUpdate
 
+        PUnsubscribe channelId nextMessage ->
+            let
+                nextReg =
+                    deleteChannel channelId reg
+            in
+            ( s
+            , nextReg |> Registry
+            , sendMessage nextMessage
+            )
+                |> protocol.onUpdate
 
---update : Protocol s x a (Model) msg model -> Proc s x a -> Model -> ( model, Cmd msg )
+        PExecute cmd ->
+            ( s, Registry reg, cmd )
+                |> protocol.onUpdate
 
-
-update : Protocol s x a msg model -> Msg -> Model -> s -> ( s, model, Cmd msg )
-update protocol msg (Registry reg) =
-    --let
-    --    addChannel subGenerator innerReg =
-    --        { innerReg
-    --            | nextId = innerReg.nextId + 1
-    --            , channels = Dict.insert innerReg.nextId (subGenerator innerReg.nextId) innerReg.channels
-    --        }
-    --
-    --    deleteChannel channelId innerReg =
-    --        { innerReg | channels = Dict.remove channelId innerReg.channels }
-    --in
-    --case io reg.state |> Debug.log "Proc.update" of
-    --    ( nextS, POk x ) ->
-    --        ( { reg | state = nextS } |> Registry
-    --        , Cmd.none
-    --        )
-    --            |> protocol.onUpdate
-    --
-    --    ( nextS, PErr e ) ->
-    --        ( { reg | state = nextS } |> Registry
-    --        , Cmd.none
-    --        )
-    --            |> protocol.onUpdate
-    --
-    --    ( nextS, PMsg msg ) ->
-    --        case msg of
-    --            PSubscribe messageGenerator subGenerator ->
-    --                let
-    --                    nextReg =
-    --                        addChannel subGenerator reg
-    --                in
-    --                ( { nextReg | state = nextS } |> Registry
-    --                , messageGenerator reg.nextId
-    --                    -- reg.nextId is correct here. nextReg.nextId contains the bumped value for the next subscription.
-    --                    |> sendMessage
-    --                )
-    --                    |> protocol.onUpdate
-    --
-    --            PUnsubscribe channelId nextMessage ->
-    --                let
-    --                    nextReg =
-    --                        deleteChannel channelId reg
-    --                in
-    --                ( { nextReg | state = nextS } |> Registry
-    --                , sendMessage nextMessage
-    --                )
-    --                    |> protocol.onUpdate
-    --
-    --            PExecute cmd ->
-    --                ( { reg | state = nextS } |> Registry
-    --                , cmd
-    --                )
-    --                    |> protocol.onUpdate
-    Debug.todo ""
+        PCont ->
+            ( s, Registry reg, Cmd.none )
+                |> protocol.onUpdate
 
 
 sendMessage : msg -> Cmd msg
