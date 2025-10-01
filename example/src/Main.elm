@@ -18,21 +18,21 @@ type Msg
 protocol : Model -> Proc.Protocol State String State Msg Model
 protocol model =
     { toMsg = ProcMsg
-    , onUpdate = Tuple.mapBoth (\pm -> { model | procModel = pm }) (Cmd.map ProcMsg)
+    , onUpdate = \( s, pm, cmd ) -> ( { model | procModel = pm, state = s }, Cmd.map ProcMsg cmd )
     , onReturn =
-        \s res ( pm, _ ) ->
+        \res ( s, pm, cmd ) ->
             let
                 _ =
                     Debug.log "Returned" { state = s, result = res }
             in
-            ( { model | procModel = pm }, Cmd.none )
+            ( { model | procModel = pm, state = s }, Cmd.map ProcMsg cmd )
     , onThrow =
-        \s res ( pm, _ ) ->
+        \res ( s, pm, cmd ) ->
             let
                 _ =
                     Debug.log "Returned" { state = s, result = res }
             in
-            ( { model | procModel = pm }, Cmd.none )
+            ( { model | procModel = pm, state = s }, Cmd.map ProcMsg cmd )
     }
 
 
